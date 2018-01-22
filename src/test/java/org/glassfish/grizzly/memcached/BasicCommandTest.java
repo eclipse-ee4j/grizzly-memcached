@@ -1,0 +1,1067 @@
+/*
+ * Copyright (c) 2012, 2017 Oracle and/or its affiliates. All rights reserved.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License v. 2.0, which is available at
+ * http://www.eclipse.org/legal/epl-2.0.
+ *
+ * This Source Code may also be made available under the following Secondary
+ * Licenses when the conditions for such availability set forth in the
+ * Eclipse Public License v. 2.0 are satisfied: GNU General Public License,
+ * version 2 with the GNU Classpath Exception, which is available at
+ * https://www.gnu.org/software/classpath/license.html.
+ *
+ * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
+ */
+
+package org.glassfish.grizzly.memcached;
+
+import org.junit.Assert;
+import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.EOFException;
+import java.io.Externalizable;
+import java.io.IOException;
+import java.io.ObjectInput;
+import java.io.ObjectOutput;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * @author Bongjae Chang
+ */
+public class BasicCommandTest {
+
+    private static final Logger logger = LoggerFactory.getLogger(BasicCommandTest.class);
+
+    private static final int expirationTimeoutInSec = 60 * 30; // 30min
+    private static final SocketAddress DEFAULT_MEMCACHED_ADDRESS = new InetSocketAddress(11211);
+    public static final String DEFAULT_CHARSET = "UTF-8";
+
+    @Test
+    public void emptyTest() {
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testBasicCommand() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        // add, set, get, delete
+
+        // ensure "name" doesn't exist
+        userCache.delete("name", false);
+
+        // "key not found" should be true
+        boolean result = userCache.delete("name", false);
+        Assert.assertTrue(result);
+
+        result = userCache.add("name", "foo", expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        String value = userCache.get("name", false);
+        Assert.assertEquals("foo", value);
+        result = userCache.add("name", "foo", expirationTimeoutInSec, false);
+        Assert.assertFalse(result); // key exists
+        result = userCache.delete("name", false);
+        Assert.assertTrue(result);
+        value = userCache.get("name", false);
+        Assert.assertEquals(null, value); // key not found
+
+        result = userCache.set("name", "foo", expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        result = userCache.set("name", "foo", expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        value = userCache.get("name", false);
+        Assert.assertEquals("foo", value);
+
+        result = userCache.delete("name", false);
+        Assert.assertTrue(result);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testSeveralPackets() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        for (int i = 0; i < 100; i++) {
+            boolean result = userCache.add("name", "foo", expirationTimeoutInSec, false);
+            Assert.assertTrue(result);
+            final String value = userCache.get("name", false);
+            Assert.assertEquals("foo", value);
+            result = userCache.delete("name", false);
+            Assert.assertTrue(result);
+        }
+
+        for (int i = 0; i < 100; i++) {
+            boolean result = userCache.set("name" + i, "foo" + i, expirationTimeoutInSec, false);
+            Assert.assertTrue(result);
+            final String value = userCache.get("name" + i, false);
+            Assert.assertEquals("foo" + i, value);
+        }
+
+        for (int i = 0; i < 100; i++) {
+            boolean result = userCache.delete("name" + i, false);
+            Assert.assertTrue(result);
+        }
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testBasicNoReplyCommand() {
+        final int retry = 3;
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        // add, set, get, delete
+
+        // ensure "name" doesn't exist
+        userCache.delete("name", false);
+
+        boolean result = userCache.add("name", "foo", expirationTimeoutInSec, true);
+        Assert.assertTrue(result);
+
+        String value = null;
+        for (int i = 0; i < retry; i++) {
+            value = userCache.get("name", false);
+            // retry
+            if (value == null) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            } else {
+                break;
+            }
+        }
+        Assert.assertEquals("foo", value);
+
+        result = userCache.add("name", "foo", expirationTimeoutInSec, true);
+        Assert.assertTrue(result); // ignore key exists error
+
+        result = userCache.delete("name", true);
+        Assert.assertTrue(result);
+
+        for (int i = 0; i < retry; i++) {
+            value = userCache.get("name", false);
+            if (value != null) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            } else {
+                break;
+            }
+        }
+        Assert.assertEquals(null, value); // key not found
+
+        result = userCache.set("name", "foo", expirationTimeoutInSec, true);
+        Assert.assertTrue(result);
+        result = userCache.set("name", "foo", expirationTimeoutInSec, true);
+        Assert.assertTrue(result);
+
+        for (int i = 0; i < retry; i++) {
+            value = userCache.get("name", false);
+            // retry
+            if (value == null) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            } else {
+                break;
+            }
+        }
+        Assert.assertEquals("foo", value);
+
+        result = userCache.delete("name", true);
+        Assert.assertTrue(result);
+
+        for (int i = 0; i < retry; i++) {
+            value = userCache.get("name", false);
+            if (value != null) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            } else {
+                break;
+            }
+        }
+        Assert.assertEquals(null, value); // key not found
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testVariousCommands() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        // ensure "name" doesn't exist
+        userCache.delete("name", true);
+
+        // replace
+        boolean result = userCache.replace("name", "bar", expirationTimeoutInSec, false);
+        Assert.assertFalse(result); // key not found
+
+        result = userCache.set("name", "foo", expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        String value = userCache.get("name", false);
+        Assert.assertEquals("foo", value);
+
+        result = userCache.replace("name", "bar", expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        value = userCache.get("name", false);
+        Assert.assertEquals("bar", value);
+
+        // append
+        String origin = value;
+        result = userCache.append("name", "_appended", false);
+        Assert.assertTrue(result);
+        value = userCache.get("name", false);
+        Assert.assertEquals(origin + "_appended", value);
+
+        // prepend
+        origin = value;
+        result = userCache.prepend("name", "prepended_", false);
+        Assert.assertTrue(result);
+        value = userCache.get("name", false);
+        Assert.assertEquals("prepended_" + origin, value);
+
+        // gets
+        final ValueWithCas<String> resultWithCas = userCache.gets("name", false);
+        Assert.assertNotNull(resultWithCas);
+        Assert.assertEquals(value, resultWithCas.getValue());
+
+        // cas
+        final long cas = resultWithCas.getCas();
+        result = userCache.cas("name", "foo", expirationTimeoutInSec, cas + 1, false);
+        Assert.assertFalse(result); // invalid cas
+        result = userCache.cas("name", "foo", expirationTimeoutInSec, cas, false);
+        Assert.assertTrue(result);
+        value = userCache.get("name", false);
+        Assert.assertEquals("foo", value);
+
+        // getKey
+        final ValueWithKey<String, String> resultWithKey = userCache.getKey("name", false);
+        Assert.assertNotNull(resultWithKey);
+        Assert.assertEquals("name", resultWithKey.getKey());
+        Assert.assertEquals("foo", resultWithKey.getValue());
+
+        // touch
+        result = userCache.touch("name", expirationTimeoutInSec);
+        Assert.assertTrue(result);
+
+        // gat
+        value = userCache.gat("name", expirationTimeoutInSec, false);
+        Assert.assertEquals("foo", value);
+
+        result = userCache.delete("name", true);
+        Assert.assertTrue(result);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testNoop() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        // noop
+        final boolean result = userCache.noop(DEFAULT_MEMCACHED_ADDRESS);
+        Assert.assertTrue(result);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testVersion() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        // version
+        final String value = userCache.version(DEFAULT_MEMCACHED_ADDRESS);
+        Assert.assertNotNull(value);
+        logger.info("Current Server Version: {}", value);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    public void testVerbosity() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        // verbosity(didn't work) v1.4.10
+        final boolean result = userCache.verbosity(DEFAULT_MEMCACHED_ADDRESS, 0);
+        Assert.assertTrue(result);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testQuitCommand() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        builder.borrowValidation(false);
+        builder.returnValidation(false);
+        builder.maxConnectionPerServer(1);
+        builder.minConnectionPerServer(1);
+        builder.responseTimeoutInMillis(2000);
+        //builder.responseTimeoutInMillis(-1);
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        final boolean result = userCache.quit(DEFAULT_MEMCACHED_ADDRESS, false);
+        Assert.assertTrue(result);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testStatsCommand() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        Map<String, String> result;
+        result = userCache.stats(DEFAULT_MEMCACHED_ADDRESS);
+        Assert.assertTrue(result.size() != 0);
+
+        // specific item didn't work v1.4.10
+        //result = userCache.statsItems(DEFAULT_MEMCACHED_ADDRESS, "pid", timeout );
+        //Assert.assertTrue(result.size() == 1);
+        //Assert.assertNotNull(result.get("pid"));
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testFlushAllCommand() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        boolean result;
+        for (int i = 0; i < 10; i++) {
+            result = userCache.set("name" + i, "foo" + i, expirationTimeoutInSec, false);
+            Assert.assertTrue(result);
+        }
+
+        result = userCache.flushAll(DEFAULT_MEMCACHED_ADDRESS, 1, false);
+        Assert.assertTrue(result);
+
+        try {
+            Thread.sleep(2000);
+        } catch (InterruptedException ignore) {
+        }
+
+        for (int i = 0; i < 10; i++) {
+            String value = userCache.get("name" + i, false);
+            Assert.assertNull(value); // expired
+        }
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testGetMulti() {
+        final int multiSize = 100;
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        Set<String> keys = new HashSet<String>();
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            keys.add(key);
+            userCache.set(key, "foo" + i, expirationTimeoutInSec, false);
+        }
+        Map<String, String> result = userCache.getMulti(keys);
+        Assert.assertEquals(multiSize, result.size());
+
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final String value = result.get(key);
+            Assert.assertNotNull(value);
+            Assert.assertEquals("foo" + i, value);
+
+            // clean
+            userCache.delete(key, false);
+        }
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testMissingGetMulti() {
+        final int multiSize = 5;
+        final int missingSize = 2;
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        Set<String> keys = new HashSet<String>();
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            keys.add(key);
+            if (i < multiSize - missingSize) {
+                userCache.set(key, "foo" + i, expirationTimeoutInSec, false);
+            }
+        }
+        Map<String, String> result = userCache.getMulti(keys);
+        Assert.assertEquals(multiSize - missingSize, result.size());
+
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            if (i < multiSize - missingSize) {
+                final String value = result.get(key);
+                Assert.assertNotNull(value);
+                Assert.assertEquals("foo" + i, value);
+            } else {
+                final String value = result.get(key);
+                Assert.assertNull(value);
+            }
+
+            // clean
+            userCache.delete(key, false);
+        }
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    @SuppressWarnings("unchecked")
+    //@Test
+    public void testSetMulti() {
+        final int multiSize = 100;
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        final Map<String, String> map = new HashMap<String, String>();
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final String value = "foo" + i;
+            map.put(key, value);
+        }
+        final Map<String, Boolean> result = userCache.setMulti(map, expirationTimeoutInSec);
+        for (Boolean success : result.values()) {
+            Assert.assertTrue(success);
+        }
+
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final String value = userCache.get(key, false);
+            Assert.assertNotNull(value);
+            Assert.assertEquals("foo" + i, value);
+
+            // clean
+            userCache.delete(key, false);
+        }
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    @SuppressWarnings("unchecked")
+    //@Test
+    public void testDeleteMulti() {
+        final int multiSize = 100;
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        final Map<String, String> map = new HashMap<String, String>();
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final String value = "foo" + i;
+            map.put(key, value);
+        }
+        Map<String, Boolean> result = userCache.setMulti(map, expirationTimeoutInSec);
+        for (Boolean success : result.values()) {
+            Assert.assertTrue(success);
+        }
+        // ensure all values are set correctly
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final String value = userCache.get(key, false);
+            Assert.assertNotNull(value);
+            Assert.assertEquals("foo" + i, value);
+        }
+        // put one missing key
+        final String missingKey = "missingName";
+        map.put(missingKey, "foo");
+        result = userCache.deleteMulti(map.keySet());
+        for (Boolean success : result.values()) {
+            // always true
+            Assert.assertTrue(success);
+        }
+        Assert.assertEquals(multiSize + 1, result.size());
+
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            Assert.assertNull(userCache.get(key, false));
+        }
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testCompareAndSet() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        userCache.set("name1", "foo", expirationTimeoutInSec, false);
+        final ValueWithCas<String> nameCas = userCache.gets("name1", false);
+        Assert.assertNotNull(nameCas);
+        Assert.assertEquals("foo", nameCas.getValue());
+        final long cas = nameCas.getCas();
+
+        userCache.set("name1", "bar", expirationTimeoutInSec, false);
+        final ValueWithCas<String> nameCas2 = userCache.gets("name1", false);
+        Assert.assertNotNull(nameCas2);
+        Assert.assertEquals("bar", nameCas2.getValue());
+        final long cas2 = nameCas2.getCas();
+
+        Assert.assertNotSame(cas, cas2);
+
+        Assert.assertFalse(userCache.cas("name1", "foo1", expirationTimeoutInSec, cas, false));
+        Assert.assertTrue(userCache.cas("name1", "bar1", expirationTimeoutInSec, cas2, false));
+
+        userCache.delete("name1", false);
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    @SuppressWarnings("unchecked")
+    //@Test
+    public void testGetsMulti() {
+        final int multiSize = 100;
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        final Map<String, String> map = new HashMap<String, String>();
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final String value = "foo" + i;
+            map.put(key, value);
+        }
+        Map<String, Boolean> result = userCache.setMulti(map, expirationTimeoutInSec);
+        for (Boolean success : result.values()) {
+            Assert.assertTrue(success);
+        }
+
+        // set them again for increasing cas
+        result = userCache.setMulti(map, expirationTimeoutInSec);
+        for (Boolean success : result.values()) {
+            Assert.assertTrue(success);
+        }
+        // ensure all values are set correctly
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final String value = userCache.get(key, false);
+            Assert.assertNotNull(value);
+            Assert.assertEquals("foo" + i, value);
+        }
+
+        // put one missing key
+        final String missingKey = "missingName";
+        map.put(missingKey, "foo");
+        final Map<String, ValueWithCas<String>> result2 = userCache.getsMulti(map.keySet());
+        Assert.assertEquals(multiSize, result2.size());
+        Assert.assertNull(result2.get(missingKey));
+
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final ValueWithCas<String> value = result2.get(key);
+            Assert.assertNotNull(value);
+            Assert.assertEquals("foo" + i, value.getValue());
+            Assert.assertNotSame(0, value.getCas());
+
+            // clean
+            userCache.delete(key, false);
+        }
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    @SuppressWarnings("unchecked")
+    //@Test
+    public void testCasMulti() {
+        final int multiSize = 100;
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        final Map<String, String> map = new HashMap<String, String>();
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final String value = "foo" + i;
+            map.put(key, value);
+        }
+        Map<String, Boolean> result = userCache.setMulti(map, expirationTimeoutInSec);
+        for (Boolean success : result.values()) {
+            Assert.assertTrue(success);
+        }
+
+        // get ValueWithCas map
+        Map<String, ValueWithCas<String>> getsResult = userCache.getsMulti(map.keySet());
+        // test casMulti
+        result = userCache.casMulti(getsResult, expirationTimeoutInSec);
+        for (Boolean success : result.values()) {
+            Assert.assertTrue(success);
+        }
+        // ensure all values are set correctly
+        for (int i = 0; i < multiSize; i++) {
+            final String key = "name" + i;
+            final String value = userCache.get(key, false);
+            Assert.assertNotNull(value);
+            Assert.assertEquals("foo" + i, value);
+        }
+
+        // get ValueWithCas map again for next test
+        getsResult = userCache.getsMulti(map.keySet());
+        // update half
+        final Map<String, String> map2 = new HashMap<String, String>();
+        for (int i = 0; i < multiSize / 2; i++) {
+            final String key = "name" + i;
+            final String value = "foo_updated" + i;
+            map2.put(key, value);
+        }
+        result = userCache.setMulti(map2, expirationTimeoutInSec);
+        for (Boolean success : result.values()) {
+            Assert.assertTrue(success);
+        }
+
+        // put one missing key
+        getsResult.put("missingName", new ValueWithCas("foo", 987654321));
+        // test casMulti again
+        result = userCache.casMulti(getsResult, expirationTimeoutInSec);
+        // the half of keys and a missing key should be set
+        Assert.assertEquals(getsResult.size() - multiSize / 2 - 1, result.size());
+        for (Boolean success : result.values()) {
+            Assert.assertTrue(success);
+        }
+
+        // clean
+        result = userCache.deleteMulti(getsResult.keySet());
+        for (Boolean success : result.values()) {
+            Assert.assertTrue(success);
+        }
+        Assert.assertEquals(getsResult.size(), result.size());
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testIncrAndDecr() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        // ensure "age" doesn't exist
+        userCache.delete("age", true);
+
+        // initial age
+        long age = userCache.incr("age", 1, 35, expirationTimeoutInSec, false);
+        Assert.assertEquals(35, age);
+
+        // increase 1
+        age = userCache.incr("age", 1, 35, expirationTimeoutInSec, false);
+        Assert.assertEquals(36, age);
+
+        // decrease 1
+        age = userCache.decr("age", 1, 35, expirationTimeoutInSec, false);
+        Assert.assertEquals(35, age);
+
+        userCache.delete("age", true);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testIncrAndDecrLongValue() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        // ensure "age" doesn't exist
+        userCache.delete("score", true);
+
+        // initial age
+        long largeNumber = Long.MAX_VALUE - 1024L;
+        long score = userCache.incr("score", 1, largeNumber, expirationTimeoutInSec, false);
+        Assert.assertEquals(largeNumber, score);
+
+        // increase 1
+        score = userCache.incr("score", 1, largeNumber, expirationTimeoutInSec, false);
+        Assert.assertEquals(largeNumber + 1L, score);
+
+        // decrease 1
+        score = userCache.decr("score", 1, largeNumber, expirationTimeoutInSec, false);
+        Assert.assertEquals(largeNumber, score);
+
+        userCache.delete("score", true);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testCompress() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        final int valueSize = BufferWrapper.DEFAULT_COMPRESSION_THRESHOLD * 10;
+        final StringBuilder stringBuilder = new StringBuilder(valueSize);
+        for (int i = 0; i < valueSize; i++) {
+            stringBuilder.append('o');
+        }
+        final String largeValue = stringBuilder.toString();
+
+        // ensure "name" doesn't exist
+        userCache.delete("name", false);
+
+        boolean result = userCache.add("name", largeValue, expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        final String value = userCache.get("name", false);
+        Assert.assertEquals(largeValue, value);
+
+        // clear
+        result = userCache.delete("name", false);
+        Assert.assertTrue(result);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testObjectCache() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, User> builder = manager.createCacheBuilder("userCache");
+        final MemcachedCache<String, User> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        final String keyName = "userKey";
+        final int smallSize = 10;
+        final int largeSize = BufferWrapper.DEFAULT_COMPRESSION_THRESHOLD * 10; // will be compressed
+        StringBuilder stringBuilder = new StringBuilder(smallSize);
+        for (int i = 0; i < smallSize; i++) {
+            stringBuilder.append('S');
+        }
+        final String smallValue = stringBuilder.toString();
+        stringBuilder = new StringBuilder(largeSize);
+        for (int i = 0; i < largeSize; i++) {
+            stringBuilder.append('L');
+        }
+        final String largeValue = stringBuilder.toString();
+
+        // ensure the key doesn't exist
+        userCache.delete(keyName, false);
+
+        final User user1 = new User(1, smallValue, "", "");
+        boolean result = userCache.add(keyName, user1, expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        final User receivedUser1 = userCache.get(keyName, false);
+        Assert.assertEquals(user1, receivedUser1);
+
+        final User user2 = new User(2, largeValue, largeValue, largeValue);
+        result = userCache.set(keyName, user2, expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        final User receivedUser2 = userCache.get(keyName, false);
+        Assert.assertEquals(user2, receivedUser2);
+
+        // clear
+        result = userCache.delete(keyName, false);
+        Assert.assertTrue(result);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testByteArrayCache() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, Object> builder = manager.createCacheBuilder("byteArrayCache");
+        final MemcachedCache<String, Object> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        final String keyName = "dataKey";
+        final int smallSize = 10;
+        final int largeSize = BufferWrapper.DEFAULT_COMPRESSION_THRESHOLD * 10; // will be compressed
+        final byte[] smallBytes = new byte[smallSize];
+        final byte[] largeBytes = new byte[largeSize];
+        for (int i = 0; i < smallSize; i++) {
+            smallBytes[i] = 'S';
+        }
+        for (int i = 0; i < largeSize; i++) {
+            largeBytes[i] = 'L';
+        }
+
+        // ensure the key doesn't exist
+        userCache.delete(keyName, false);
+
+        boolean result = userCache.add(keyName, smallBytes, expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        byte[] receivedBytes = (byte[]) userCache.get(keyName, false);
+        Assert.assertArrayEquals(smallBytes, receivedBytes);
+
+        result = userCache.set(keyName, largeBytes, expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        receivedBytes = (byte[]) userCache.get(keyName, false);
+        Assert.assertArrayEquals(largeBytes, receivedBytes);
+
+        // clear
+        result = userCache.delete(keyName, false);
+        Assert.assertTrue(result);
+
+        manager.shutdown();
+    }
+
+    // memcached server should be booted in local
+    //@Test
+    public void testByteBufferCache() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, ByteBuffer> builder = manager.createCacheBuilder("byteBufferCache");
+        final MemcachedCache<String, ByteBuffer> userCache = builder.build();
+        userCache.addServer(DEFAULT_MEMCACHED_ADDRESS);
+
+        final String keyName = "dataKey";
+        final int smallSize = 10;
+        final int largeSize = BufferWrapper.DEFAULT_COMPRESSION_THRESHOLD * 10; // will be compressed
+        final ByteBuffer smallByteBuffer = ByteBuffer.allocate(smallSize);
+        final ByteBuffer largeByteBuffer = ByteBuffer.allocate(largeSize);
+        for (int i = 0; i < smallSize; i++) {
+            smallByteBuffer.put((byte) 'S');
+        }
+        smallByteBuffer.flip();
+        for (int i = 0; i < largeSize; i++) {
+            largeByteBuffer.put((byte) 'L');
+        }
+        largeByteBuffer.flip();
+
+        // ensure the key doesn't exist
+        userCache.delete(keyName, false);
+
+        boolean result = userCache.add(keyName, smallByteBuffer, expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        ByteBuffer receivedByteBuffer = userCache.get(keyName, false);
+        final byte[] smallBytes = new byte[smallSize];
+        receivedByteBuffer.get(smallBytes);
+        Assert.assertArrayEquals(smallByteBuffer.array(), smallBytes);
+
+        result = userCache.set(keyName, largeByteBuffer, expirationTimeoutInSec, false);
+        Assert.assertTrue(result);
+        receivedByteBuffer = userCache.get(keyName, false);
+        final byte[] largeBytes = new byte[largeSize];
+        receivedByteBuffer.get(largeBytes);
+        Assert.assertArrayEquals(largeByteBuffer.array(), largeBytes);
+
+        // clear
+        result = userCache.delete(keyName, false);
+        Assert.assertTrue(result);
+
+        manager.shutdown();
+    }
+
+    @Test
+    public void testCurrentServerList() {
+        final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
+        final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("user");
+        final MemcachedCache<String, String> userCache = builder.build();
+        SocketAddress address1 = new InetSocketAddress(11211);
+        SocketAddress address2 = new InetSocketAddress("127.0.0.1", 11211);
+        userCache.addServer(address1);
+        userCache.addServer(address2);
+
+        List<SocketAddress> current = userCache.getCurrentServerList();
+        Assert.assertNotNull(current);
+        Assert.assertTrue(current.size() == 2);
+        userCache.removeServer(address2);
+        current = userCache.getCurrentServerList();
+        Assert.assertTrue(current.size() == 1);
+
+        manager.shutdown();
+    }
+
+    private static class User implements Externalizable {
+        private int id;
+        private String name;
+        private String address;
+        private String country;
+
+        public User() {
+        }
+
+        private User(final int id, final String name, final String address, final String country) {
+            if (name == null || address == null || country == null) {
+                throw new IllegalArgumentException("invalid parameters");
+            }
+            this.id = id;
+            this.name = name;
+            this.address = address;
+            this.country = country;
+        }
+
+        @Override
+        public boolean equals(final Object obj) {
+            if (!(obj instanceof User)) {
+                return false;
+            }
+            if (this == obj) {
+                return true;
+            }
+            final User user = (User) obj;
+            return this.id == user.id &&
+                    this.name.equals(user.name) &&
+                    this.address.equals(user.address) &&
+                    this.country.equals(user.country);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = 17;
+            result = 31 * result + id;
+            result = 31 * result + name.hashCode();
+            result = 31 * result + address.hashCode();
+            result = 31 * result + country.hashCode();
+            return result;
+        }
+
+        @Override
+        public void writeExternal(final ObjectOutput out) throws IOException {
+            if (out == null) {
+                return;
+            }
+            final byte[] nameBytes = name.getBytes(DEFAULT_CHARSET);
+            final int nameBytesLen = nameBytes.length;
+            final byte[] addressBytes = address.getBytes(DEFAULT_CHARSET);
+            final int addressBytesLen = addressBytes.length;
+            final byte[] countryBytes = country.getBytes(DEFAULT_CHARSET);
+            final int countryBytesLen = countryBytes.length;
+            out.writeInt(id);
+            out.writeInt(nameBytesLen);
+            out.write(nameBytes);
+            out.writeInt(addressBytesLen);
+            out.write(addressBytes);
+            out.writeInt(countryBytesLen);
+            out.write(countryBytes);
+        }
+
+        @Override
+        public void readExternal(final ObjectInput in) throws IOException, ClassNotFoundException {
+            final int id = in.readInt();
+            final int nameBytesLen = in.readInt();
+            final byte[] nameBytes = new byte[nameBytesLen];
+            int read = 0;
+            do {
+                int num = in.read(nameBytes, read, nameBytesLen - read);
+                if (num < 0) {
+                    throw new EOFException("the end of the stream is reached");
+                } else {
+                    read += num;
+                }
+            } while (read < nameBytesLen);
+            final String name = new String(nameBytes, DEFAULT_CHARSET);
+            final int addressBytesLen = in.readInt();
+            final byte[] addressBytes = new byte[addressBytesLen];
+            read = 0;
+            do {
+                int num = in.read(addressBytes, read, addressBytesLen - read);
+                if (num < 0) {
+                    throw new EOFException("the end of the stream is reached");
+                } else {
+                    read += num;
+                }
+            } while (read < addressBytesLen);
+            final String address = new String(addressBytes, DEFAULT_CHARSET);
+            final int countryBytesLen = in.readInt();
+            final byte[] countryBytes = new byte[countryBytesLen];
+            read = 0;
+            do {
+                int num = in.read(countryBytes, read, countryBytesLen - read);
+                if (num < 0) {
+                    throw new EOFException("the end of the stream is reached");
+                } else {
+                    read += num;
+                }
+            } while (read < countryBytesLen);
+            final String country = new String(countryBytes, DEFAULT_CHARSET);
+
+            this.id = id;
+            this.name = name;
+            this.address = address;
+            this.country = country;
+        }
+
+        @Override
+        public String toString() {
+            return "User{" +
+                    "id=" + id +
+                    ", name='" + name + '\'' +
+                    ", address='" + address + '\'' +
+                    ", country='" + country + '\'' +
+                    '}';
+        }
+    }
+}

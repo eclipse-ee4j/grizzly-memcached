@@ -29,7 +29,7 @@
     <packaging>bundle</packaging>
     <version>1.3.18-SNAPSHOT</version>
     <name>grizzly-memcached</name>
-    <url>http://grizzly.java.net</url>
+    <url>https://projects.eclipse.org/projects/ee4j.grizzly</url>
     <issueManagement>
         <system>GitHub</system>
         <url>https://github.com/javaee/grizzly-memcached/issues</url>

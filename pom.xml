@@ -32,7 +32,7 @@
     <url>https://projects.eclipse.org/projects/ee4j.grizzly</url>
     <issueManagement>
         <system>GitHub</system>
-        <url>https://github.com/javaee/grizzly-memcached/issues</url>
+        <url>https://github.com/eclipse-ee4j/grizzly-memcached/issues</url>
     </issueManagement>
     <mailingLists>
         <mailingList>
@@ -57,11 +57,11 @@
         </license>
     </licenses>
     <scm>
-        <connection>scm:git:https://github.com/javaee/grizzly-memcached.git</connection>
+        <connection>scm:git:https://github.com/eclipse-ee4j/grizzly-memcached.git</connection>
         <developerConnection>
-            scm:git:git@github.com:javaee/grizzly-memcached.git
+            scm:git:git@github.com:eclipse-ee4j/grizzly-memcached.git
         </developerConnection>
-        <url>https://github.com/javaee/grizzly-memcached</url>
+        <url>https://github.com/eclipse-ee4j/grizzly-memcached</url>
     </scm>
     <organization>
         <name>Oracle Corporation</name>

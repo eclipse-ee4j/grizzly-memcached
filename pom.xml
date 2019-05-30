@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2012, 2018 Oracle and/or its affiliates. All rights reserved.
+    Copyright (c) 2012, 2019 Oracle and/or its affiliates and others.
+    All rights reserved.
 
     This program and the accompanying materials are made available under the
     terms of the Eclipse Public License v. 2.0, which is available at
@@ -15,6 +16,8 @@
 
     SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
 
+    Contributors:
+      Payara Services - Upgrade Zookeeper to 3.5.5.
 -->
 
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
@@ -69,7 +72,7 @@
     </organization>
     <properties>
         <grizzly-framework-version>2.4.3</grizzly-framework-version>
-        <zookeeper-version>3.4.11</zookeeper-version>
+        <zookeeper-version>3.5.5</zookeeper-version>
         <jdk.compile.version>1.8</jdk.compile.version>
         <maven.compiler.argument>
             -Xlint:unchecked,deprecation,fallthrough,finally,cast,dep-ann,empty,overrides

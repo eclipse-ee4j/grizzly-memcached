@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2012, 2019 Oracle and/or its affiliates and others.
-    All rights reserved.
+    Copyright (c) 2012, 2019 Oracle and/or its affiliates. All rights reserved.
 
     This program and the accompanying materials are made available under the
     terms of the Eclipse Public License v. 2.0, which is available at
@@ -16,8 +15,6 @@
 
     SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
 
-    Contributors:
-      Payara Services - Upgrade Zookeeper to 3.5.5.
 -->
 
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
@@ -71,7 +68,7 @@
         <url>http://www.oracle.com</url>
     </organization>
     <properties>
-        <grizzly-framework-version>2.4.3</grizzly-framework-version>
+        <grizzly-framework-version>2.4.4</grizzly-framework-version>
         <zookeeper-version>3.5.5</zookeeper-version>
         <jdk.compile.version>1.8</jdk.compile.version>
         <maven.compiler.argument>
@@ -108,7 +105,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
-                <version>1.3.1</version>
+                <version>1.4.1</version>
                 <executions>
                     <execution>
                         <id>enforce-versions</id>
@@ -124,8 +121,8 @@
                                     </message>
                                 </requireJavaVersion>
                                 <requireMavenVersion>
-                                    <version>[3.0.3,)</version>
-                                    <message>You need Maven 3.0.3 or above!</message>
+                                    <version>[3.0.4,)</version>
+                                    <message>You need Maven 3.0.4 or above!</message>
                                 </requireMavenVersion>
                             </rules>
                         </configuration>
@@ -135,7 +132,7 @@
             <plugin>
                 <groupId>org.apache.felix</groupId>
                 <artifactId>maven-bundle-plugin</artifactId>
-                <version>2.1.0</version>
+                <version>3.5.1</version>
                 <extensions>true</extensions>
                 <configuration>
                     <instructions>
@@ -152,7 +149,7 @@
             <plugin>
                 <inherited>true</inherited>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>2.4</version>
+                <version>3.5.1</version>
                 <configuration>
                     <source>${jdk.compile.version}</source>
                     <target>${jdk.compile.version}</target>
@@ -164,7 +161,7 @@
                 <inherited>true</inherited>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
-                <version>2.1.2</version>
+                <version>3.0.1</version>
                 <executions>
                     <execution>
                         <id>attach-sources</id>
@@ -177,19 +174,21 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-release-plugin</artifactId>
+                <version>2.5.3</version>
                 <configuration>
                     <mavenExecutorId>forked-path</mavenExecutorId>
                     <autoVersionSubmodules>true</autoVersionSubmodules>
                     <preparationGoals>clean install</preparationGoals>
+                    <useReleaseProfile>false</useReleaseProfile>
                     <pushChanges>false</pushChanges>
-                    <goals>deploy -Dmaven.test.skip=true</goals>
+                    <arguments>${release.arguments}</arguments>
                 </configuration>
             </plugin>
             <plugin>
                 <inherited>true</inherited>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>2.4</version>
+                <version>3.1.0</version>
                 <configuration>
                     <archive>
                         <manifestEntries>
@@ -205,13 +204,25 @@
             <plugin>
                 <groupId>org.glassfish.copyright</groupId>
                 <artifactId>glassfish-copyright-maven-plugin</artifactId>
-                <version>1.46</version>
+                <version>1.49</version>
                 <configuration>
                     <excludeFile>copyright-exclude</excludeFile>
                     <scm>git</scm>
                     <scmOnly>true</scmOnly>
                     <warn>false</warn>
                 </configuration>
+            </plugin>
+            <plugin>
+                 <groupId>org.sonatype.plugins</groupId>
+                 <artifactId>nexus-staging-maven-plugin</artifactId>
+                     <version>1.6.8</version>
+                     <configuration>
+                         <serverId>ossrh</serverId>
+                         <nexusUrl>https://oss.sonatype.org/</nexusUrl>
+                         <autoReleaseAfterClose>false</autoReleaseAfterClose>
+                         <!-- Skip based on the maven.deploy.skip property -->
+                         <skipNexusStagingDeployMojo>${maven.deploy.skip}</skipNexusStagingDeployMojo>
+                     </configuration>
             </plugin>
         </plugins>
     </build>
@@ -243,13 +254,14 @@
             </build>
         </profile>
         <profile>
-            <id>release-profile</id>
+            <id>release</id>
             <build>
                 <plugins>
                     <plugin>
                         <inherited>true</inherited>
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>1.12</version>
                         <executions>
                             <execution>
                                 <id>add-source</id>
@@ -272,6 +284,7 @@
                         <version>2.8.1</version>
                         <configuration>
                             <aggregate>true</aggregate>
+                            <additionalparam>-Xdoclint:none</additionalparam>
                         </configuration>
                         <executions>
                             <execution>
@@ -281,6 +294,25 @@
                                 </goals>
                             </execution>
                         </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>1.6</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.plugins</groupId>
+                        <artifactId>nexus-staging-maven-plugin</artifactId>
+                        <extensions>true</extensions>
                     </plugin>
                 </plugins>
             </build>

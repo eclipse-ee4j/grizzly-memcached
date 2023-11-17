@@ -19,6 +19,7 @@ package org.glassfish.grizzly.memcached.zookeeper;
 import org.glassfish.grizzly.memcached.MemcachedCache;
 import org.glassfish.grizzly.memcached.ValueWithCas;
 import org.glassfish.grizzly.memcached.ValueWithKey;
+import org.glassfish.grizzly.monitoring.MonitoringConfig;
 import org.junit.Assert;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -575,6 +576,11 @@ public class CacheServerListBarrierListenerTest {
 
         @Override
         public String version(SocketAddress address) {
+            return null;
+        }
+
+        @Override
+        public MonitoringConfig getMonitoringConfig() {
             return null;
         }
     }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 
-    Copyright (c) 2010, 2022 Oracle and/or its affiliates. All rights reserved.
+    Copyright (c) 2010, 2023 Oracle and/or its affiliates. All rights reserved.
 
     This program and the accompanying materials are made available under the
     terms of the Eclipse Public License v. 2.0, which is available at
@@ -49,9 +49,9 @@
             <id>carryel</id>
             <name>Bongjae Chang</name>
             <email>bongjae.chang@gmail.com</email>
-            <url>https://community.oracle.com/blogs/carryel</url>
+            <url>https://projects.eclipse.org/content/bongjae-chang-committer-eclipse-grizzly</url>
             <organization>Kakao Corp.</organization>
-            <organizationUrl>http://www.kakaocorp.com/en/main</organizationUrl>
+            <organizationUrl>https://www.kakaocorp.com/page/?lang=ENG</organizationUrl>
         </developer>
     </developers>
 
@@ -75,7 +75,7 @@
 
     <properties>
         <grizzly-framework-version>2.4.4</grizzly-framework-version>
-        <zookeeper-version>3.7.2</zookeeper-version>
+        <zookeeper-version>3.8.1</zookeeper-version>
         <jdk.compile.version>1.8</jdk.compile.version>
         <maven.compiler.argument>
             -Xlint:unchecked,deprecation,fallthrough,finally,cast,dep-ann,empty,overrides
@@ -86,6 +86,11 @@
         <dependency>
             <groupId>org.glassfish.grizzly</groupId>
             <artifactId>grizzly-framework</artifactId>
+            <version>${grizzly-framework-version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.grizzly</groupId>
+            <artifactId>grizzly-framework-monitoring</artifactId>
             <version>${grizzly-framework-version}</version>
         </dependency>
         <dependency>
@@ -163,7 +168,7 @@
 
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.10.0</version>
+                <version>3.11.0</version>
                 <configuration>
                     <source>${jdk.compile.version}</source>
                     <target>${jdk.compile.version}</target>
@@ -250,10 +255,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.0.0-M5</version>
-                <configuration>
-                    <forkMode>always</forkMode>
-                </configuration>
+                <version>3.0.0</version>
             </plugin>
         </plugins>
     </build>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2017 Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023 Oracle and/or its affiliates. All rights reserved.
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License v. 2.0, which is available at
@@ -75,8 +75,8 @@ public class CacheServerListBarrierListener implements BarrierListener {
             if (!checked) {
                 if (logger.isLoggable(Level.WARNING)) {
                     logger.log(Level.WARNING,
-                            "failed to check the cache server list from the remote. cacheName={0}, local={1}, remote={2}",
-                            new Object[]{cacheName, localCacheServerSet, remoteCacheServers});
+                               "local and remote config about cache server list are different, so the remote information will be ignored. cacheName={0}, local={1}, remote={2}",
+                               new Object[]{cacheName, localCacheServerSet, remoteCacheServers});
                 }
             } else {
                 if (logger.isLoggable(Level.INFO)) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2017 Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023 Oracle and/or its affiliates. All rights reserved.
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License v. 2.0, which is available at
@@ -17,8 +17,12 @@
 package org.glassfish.grizzly.memcached.pool;
 
 import org.glassfish.grizzly.Grizzly;
+import org.glassfish.grizzly.monitoring.DefaultMonitoringConfig;
+import org.glassfish.grizzly.monitoring.MonitoringConfig;
+import org.glassfish.grizzly.monitoring.MonitoringUtils;
 
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -52,6 +56,7 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
     private static final int MAX_VALIDATION_RETRY_COUNT = 3;
 
     private final PoolableObjectFactory<K, V> factory;
+    private final String name;
     private final int min;
     private final int max;
     private final boolean borrowValidation;
@@ -65,8 +70,18 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
     private final ScheduledExecutorService scheduledExecutor;
     private final ScheduledFuture<?> scheduledFuture;
 
+    private final DefaultMonitoringConfig<ObjectPoolProbe> baseObjectPoolMonitoringConfig =
+            new DefaultMonitoringConfig<ObjectPoolProbe>(ObjectPoolProbe.class) {
+
+                @Override
+                public Object createManagementObject() {
+                    return createJmxManagementObject();
+                }
+            };
+
     private BaseObjectPool(Builder<K, V> builder) {
         this.factory = builder.factory;
+        this.name = builder.name;
         this.min = builder.min;
         this.max = builder.max;
         this.borrowValidation = builder.borrowValidation;
@@ -456,7 +471,7 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         if (pool == null) {
             return 0;
         }
-        return pool.poolSizeHint.get();
+        return pool.getPoolSize();
     }
 
     /**
@@ -474,7 +489,7 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         if (pool == null) {
             return 0;
         }
-        return pool.peakSizeHint;
+        return pool.getPeakCount();
     }
 
     /**
@@ -492,7 +507,7 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         if (pool == null) {
             return 0;
         }
-        return pool.poolSizeHint.get() - pool.queue.size();
+        return pool.getActiveCount();
     }
 
     /**
@@ -510,7 +525,57 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         if (pool == null) {
             return 0;
         }
-        return pool.queue.size();
+        return pool.getIdleCount();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public int getTotalPoolSize() {
+        if (destroyed.get()) {
+            return -1;
+        }
+        return keyedObjectPool.values().stream().mapToInt(QueuePool::getPoolSize).filter(i -> i > 0).sum();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public int getHighestPeakCount() {
+        if (destroyed.get()) {
+            return -1;
+        }
+        final OptionalInt maxCount =
+                keyedObjectPool.values().stream().mapToInt(QueuePool::getPeakCount).filter(i -> i > 0).max();
+        return maxCount.orElse(-1);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public int getTotalActiveCount() {
+        if (destroyed.get()) {
+            return -1;
+        }
+        return keyedObjectPool.values().stream().mapToInt(QueuePool::getActiveCount).filter(i -> i > 0).sum();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public int getTotalIdleCount() {
+        if (destroyed.get()) {
+            return -1;
+        }
+        return keyedObjectPool.values().stream().mapToInt(QueuePool::getIdleCount).filter(i -> i > 0).sum();
+    }
+
+    public String getName() {
+        return name;
     }
 
     public int getMin() {
@@ -537,6 +602,32 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         return keepAliveTimeoutInSecs;
     }
 
+    public boolean isDestroyed() {
+        return destroyed.get();
+    }
+
+    public String getKeys() {
+        return keyedObjectPool.keySet().toString();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public MonitoringConfig<ObjectPoolProbe> getMonitoringConfig() {
+        return baseObjectPoolMonitoringConfig;
+    }
+
+    /**
+     * Create the object pool JMX management object.
+     *
+     * @return the object pool JMX management object.
+     */
+    private Object createJmxManagementObject() {
+        return MonitoringUtils
+                .loadJmxObject("org.glassfish.grizzly.memcached.pool.jmx.BaseObjectPool", this, BaseObjectPool.class);
+    }
+
     /**
      * For storing idle objects, {@link BlockingQueue} will be used.
      * If this pool has max size(bounded pool), it uses {@link LinkedBlockingQueue}.
@@ -555,6 +646,22 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
             } else {
                 queue = new LinkedBlockingQueue<V>(max);
             }
+        }
+
+        private int getPoolSize() {
+            return poolSizeHint.get();
+        }
+
+        private int getPeakCount() {
+            return peakSizeHint;
+        }
+
+        private int getActiveCount() {
+            return poolSizeHint.get() - queue.size();
+        }
+
+        private int getIdleCount() {
+            return queue.size();
         }
     }
 
@@ -604,6 +711,7 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         private static final boolean DEFAULT_DISPOSABLE = false;
         private static final long DEFAULT_KEEP_ALIVE_TIMEOUT_IN_SEC = 30 * 60; // 30min
         private final PoolableObjectFactory<K, V> factory;
+        private String name = "";
         private int min = DEFAULT_MIN;
         private int max = DEFAULT_MAX;
         private boolean borrowValidation = DEFAULT_BORROW_VALIDATION;
@@ -618,6 +726,13 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
          */
         public Builder(PoolableObjectFactory<K, V> factory) {
             this.factory = factory;
+        }
+
+        public Builder<K, V> name(final String name) {
+            if (name != null) {
+                this.name = name;
+            }
+            return this;
         }
 
         /**
@@ -723,7 +838,8 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
     @Override
     public String toString() {
         return "BaseObjectPool{" +
-                "keepAliveTimeoutInSecs=" + keepAliveTimeoutInSecs +
+                "name=" + name +
+                ", keepAliveTimeoutInSecs=" + keepAliveTimeoutInSecs +
                 ", disposable=" + disposable +
                 ", borrowValidation=" + borrowValidation +
                 ", returnValidation=" + returnValidation +

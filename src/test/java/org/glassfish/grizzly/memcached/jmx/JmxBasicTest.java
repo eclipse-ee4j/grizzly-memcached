@@ -33,53 +33,6 @@ import static org.junit.Assert.assertNotNull;
  */
 public class JmxBasicTest {
 
-    /*
-    @Test
-    public void testMy() {
-        final GrizzlyMemcachedCacheManager cacheManager = new GrizzlyMemcachedCacheManager.Builder().build();
-
-        final org.glassfish.grizzly.memcached.GrizzlyMemcachedCache.Builder<String, String> builder1 = cacheManager.createCacheBuilder("JmxGrizzlyMemcachedCache1");
-        builder1.jmxEnabled(true);
-        builder1.healthMonitorIntervalInSecs(3L); ///// todo test
-        final MemcachedCache<String, String> testCache1 = builder1.build();
-        testCache1.addServer(new InetSocketAddress(11211));
-        testCache1.addServer(new InetSocketAddress(11212));
-        testCache1.addServer(new InetSocketAddress(11213));
-        final org.glassfish.grizzly.memcached.GrizzlyMemcachedCache.Builder<String, String> builder2 = cacheManager.createCacheBuilder("JmxGrizzlyMemcachedCache2");
-        builder2.jmxEnabled(true);
-        builder2.healthMonitorIntervalInSecs(33L); ///// todo test
-        final MemcachedCache<String, String> testCache2 = builder2.build();
-        testCache2.addServer(new InetSocketAddress(11211));
-        testCache2.addServer(new InetSocketAddress(11212));
-        testCache2.addServer(new InetSocketAddress(11213));
-
-
-        for (int i=0 ; i<1000; i++) {
-            // todo test
-            System.out.println(testCache1.add("name", "foo", 60, false));
-            System.out.println(testCache1.get("name", false));
-            try {
-                TimeUnit.SECONDS.sleep(5L);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
-        try {
-            TimeUnit.SECONDS.sleep(6300L);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-
-        cacheManager.shutdown();
-
-        try {
-            TimeUnit.SECONDS.sleep(20L);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-    }
-    */
-
     @Test
     public void testJmxGrizzlyMemcachedCache() {
         final GrizzlyMemcachedCacheManager cacheManager = new GrizzlyMemcachedCacheManager.Builder().build();

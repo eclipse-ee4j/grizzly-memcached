@@ -18,12 +18,18 @@ package org.glassfish.grizzly.memcached.jmx;
 
 import org.glassfish.gmbal.Description;
 import org.glassfish.gmbal.GmbalMBean;
+import org.glassfish.gmbal.Impact;
 import org.glassfish.gmbal.ManagedAttribute;
 import org.glassfish.gmbal.ManagedObject;
+import org.glassfish.gmbal.ManagedOperation;
+import org.glassfish.gmbal.ParameterNames;
 import org.glassfish.grizzly.Transport;
 import org.glassfish.grizzly.jmxbase.GrizzlyJmxManager;
 import org.glassfish.grizzly.memcached.pool.ObjectPool;
 import org.glassfish.grizzly.monitoring.jmx.JmxObject;
+
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 
 /**
  * JMX managed object for grizzly memcached cache implementations.
@@ -94,11 +100,6 @@ public class GrizzlyMemcachedCache extends JmxObject {
         return cache.getResponseTimeoutInMillis();
     }
 
-    @ManagedAttribute(id = "grizzly-memcached-cache-server-list")
-    public String getServerList() {
-        return cache.getServerList();
-    }
-
     @ManagedAttribute(id = "grizzly-memcached-cache-health-monitor-interval-seconds")
     public long getHealthMonitorIntervalInSecs() {
         return cache.getHealthMonitorIntervalInSecs();
@@ -122,6 +123,43 @@ public class GrizzlyMemcachedCache extends JmxObject {
     @ManagedAttribute(id = "grizzly-memcached-cache-zookeeper-server-list-path")
     public String getZooKeeperServerListPath() {
         return cache.getZooKeeperServerListPath();
+    }
+
+    @ManagedAttribute(id = "grizzly-memcached-cache-current-server-list-from-zookeeper")
+    public String getCurrentServerListFromZooKeeper() {
+        return cache.getCurrentServerListFromZooKeeper();
+    }
+    @ManagedAttribute(id = "grizzly-memcached-cache-current-server-list")
+    public String getCurrentServerList() {
+        return cache.getCurrentServerList().toString();
+    }
+
+    @ManagedOperation(id = "grizzly-memcached-cache-connection-size", impact = Impact.INFO)
+    @Description("The total number of connections currently idle and active in this pool or a negative value if unsupported.")
+    @ParameterNames({"hostname", "port"})
+    public int getConnectionSize( final String hostname, final int port) {
+        return cache.getConnectionSize(getAddress(hostname, port));
+    }
+
+    @ManagedOperation(id = "grizzly-memcached-cache-peak-count", impact = Impact.INFO)
+    @Description("The peak number of connections or a negative value if unsupported.")
+    @ParameterNames({"hostname","port"})
+    public int getPeakCount(final String hostname, final int port) {
+        return cache.getPeakCount(getAddress(hostname, port));
+    }
+
+    @ManagedOperation(id = "grizzly-memcached-cache-active-count", impact = Impact.INFO)
+    @Description("The number of connections currently borrowed in this pool or a negative value if unsupported.")
+    @ParameterNames({"hostname","port"})
+    public int getActiveCount(final String hostname, final int port) {
+        return cache.getActiveCount(getAddress(hostname, port));
+    }
+
+    @ManagedOperation(id = "grizzly-memcached-cache-idle-count", impact = Impact.INFO)
+    @Description("The number of connections currently idle in this pool or a negative value if unsupported.")
+    @ParameterNames({"hostname","port"})
+    public int getIdleCount(final String hostname, final int port) {
+        return cache.getIdleCount(getAddress(hostname, port));
     }
 
     @ManagedAttribute(id = "grizzly-memcached-cache-jmx-enabled")
@@ -158,6 +196,14 @@ public class GrizzlyMemcachedCache extends JmxObject {
                 currentConnectionPool = connectionPool;
                 connectionPoolJmx = jmx;
             }
+        }
+    }
+
+    private static SocketAddress getAddress(final String hostname, final int port) {
+        try {
+            return new InetSocketAddress(hostname, port);
+        } catch(Exception ignore) {
+            return null;
         }
     }
 }

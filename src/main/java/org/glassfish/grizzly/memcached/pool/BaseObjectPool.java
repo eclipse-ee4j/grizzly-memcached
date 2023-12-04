@@ -469,7 +469,7 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         }
         final QueuePool<V> pool = keyedObjectPool.get(key);
         if (pool == null) {
-            return 0;
+            return -1;
         }
         return pool.getPoolSize();
     }
@@ -487,7 +487,7 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         }
         final QueuePool<V> pool = keyedObjectPool.get(key);
         if (pool == null) {
-            return 0;
+            return -1;
         }
         return pool.getPeakCount();
     }
@@ -505,7 +505,7 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         }
         final QueuePool<V> pool = keyedObjectPool.get(key);
         if (pool == null) {
-            return 0;
+            return -1;
         }
         return pool.getActiveCount();
     }
@@ -523,7 +523,7 @@ public class BaseObjectPool<K, V> implements ObjectPool<K, V> {
         }
         final QueuePool<V> pool = keyedObjectPool.get(key);
         if (pool == null) {
-            return 0;
+            return -1;
         }
         return pool.getIdleCount();
     }

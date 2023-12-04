@@ -2660,10 +2660,6 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         return responseTimeoutInMillis;
     }
 
-    public String getServerList() {
-        return servers.toString();
-    }
-
     public long getHealthMonitorIntervalInSecs() {
         return healthMonitorIntervalInSecs;
     }
@@ -2674,6 +2670,58 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
 
     public boolean isPreferRemoteConfig() {
         return preferRemoteConfig;
+    }
+
+    /**
+     * Returns the total number of connections
+     *
+     * @param server the server to query
+     * @return the total number of connections corresponding to the given {@code server} currently idle and active in this pool or a negative value if unsupported
+     */
+    public int getConnectionSize(final SocketAddress server) {
+        if (connectionPool == null) {
+            return -1;
+        }
+        return connectionPool.getPoolSize(server);
+    }
+
+    /**
+     * Returns the peak number of connections
+     *
+     * @param server the server to query
+     * @return the peak number of connections corresponding to the given {@code server} or a negative value if unsupported
+     */
+    public int getPeakCount(final SocketAddress server) {
+        if (connectionPool == null) {
+            return -1;
+        }
+        return connectionPool.getPeakCount(server);
+    }
+
+    /**
+     * Returns the number of connections currently borrowed from but not yet returned to the pool
+     *
+     * @param server the server to query
+     * @return the number of connections corresponding to the given {@code server} currently borrowed in this pool or a negative value if unsupported
+     */
+    public int getActiveCount(final SocketAddress server) {
+        if (connectionPool == null) {
+            return -1;
+        }
+        return connectionPool.getActiveCount(server);
+    }
+
+    /**
+     * Returns the number of connections currently idle in this pool
+     *
+     * @param server the server to query
+     * @return the number of connections corresponding to the given {@code server} currently idle in this pool or a negative value if unsupported
+     */
+    public int getIdleCount(final SocketAddress server) {
+        if (connectionPool == null) {
+            return -1;
+        }
+        return connectionPool.getIdleCount(server);
     }
 
     public boolean isJmxEnabled() {

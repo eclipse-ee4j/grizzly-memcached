@@ -157,7 +157,7 @@ public interface ObjectPool<K, V> extends MonitoringAware<ObjectPoolProbe> {
     public int getPoolSize(final K key);
 
     /**
-     * Returns the total peak number of instances
+     * Returns the peak number of instances
      *
      * @param key the key to query
      * @return the peak number of instances corresponding to the given {@code key} or a negative value if unsupported

@@ -93,10 +93,10 @@ public class BaseObjectPoolTest {
 
             Assert.assertEquals(i, factory.sequence);
 
-            Assert.assertEquals(0, pool.getPoolSize(i));
-            Assert.assertEquals(0, pool.getActiveCount(i));
-            Assert.assertEquals(0, pool.getIdleCount(i));
-            Assert.assertEquals(0, pool.getPeakCount(i));
+            Assert.assertEquals(-1, pool.getPoolSize(i));
+            Assert.assertEquals(-1, pool.getActiveCount(i));
+            Assert.assertEquals(-1, pool.getIdleCount(i));
+            Assert.assertEquals(-1, pool.getPeakCount(i));
 
             Integer object = null;
             try {
@@ -132,10 +132,10 @@ public class BaseObjectPoolTest {
         final ObjectPool<Integer, Integer> pool = builder.build();
 
         final int key = 1;
-        Assert.assertEquals(0, pool.getPoolSize(key));
-        Assert.assertEquals(0, pool.getActiveCount(key));
-        Assert.assertEquals(0, pool.getIdleCount(key));
-        Assert.assertEquals(0, pool.getPeakCount(key));
+        Assert.assertEquals(-1, pool.getPoolSize(key));
+        Assert.assertEquals(-1, pool.getActiveCount(key));
+        Assert.assertEquals(-1, pool.getIdleCount(key));
+        Assert.assertEquals(-1, pool.getPeakCount(key));
 
         final List<Integer> objects = new ArrayList<Integer>();
         for (int i = 0; i < 25; i++) {
@@ -157,10 +157,10 @@ public class BaseObjectPoolTest {
         builder.disposable(true);
         final ObjectPool<Integer, Integer> disposablePool = builder.build();
 
-        Assert.assertEquals(0, disposablePool.getPoolSize(key));
-        Assert.assertEquals(0, disposablePool.getActiveCount(key));
-        Assert.assertEquals(0, disposablePool.getIdleCount(key));
-        Assert.assertEquals(0, disposablePool.getPeakCount(key));
+        Assert.assertEquals(-1, disposablePool.getPoolSize(key));
+        Assert.assertEquals(-1, disposablePool.getActiveCount(key));
+        Assert.assertEquals(-1, disposablePool.getIdleCount(key));
+        Assert.assertEquals(-1, disposablePool.getPeakCount(key));
 
         for (int i = 0; i < 25; i++) {
             try {
@@ -213,10 +213,10 @@ public class BaseObjectPoolTest {
         final ObjectPool<Integer, Integer> pool = builder.build();
 
         final int key = 1;
-        Assert.assertEquals(0, pool.getPoolSize(key));
-        Assert.assertEquals(0, pool.getActiveCount(key));
-        Assert.assertEquals(0, pool.getIdleCount(key));
-        Assert.assertEquals(0, pool.getPeakCount(key));
+        Assert.assertEquals(-1, pool.getPoolSize(key));
+        Assert.assertEquals(-1, pool.getActiveCount(key));
+        Assert.assertEquals(-1, pool.getIdleCount(key));
+        Assert.assertEquals(-1, pool.getPeakCount(key));
 
         final List<Integer> objects = new ArrayList<Integer>();
         for (int i = 0; i < 25; i++) {
@@ -262,10 +262,10 @@ public class BaseObjectPoolTest {
         builder.returnValidation(true);
         final ObjectPool<Integer, Integer> invalidePool = builder.build();
 
-        Assert.assertEquals(0, invalidePool.getPoolSize(key));
-        Assert.assertEquals(0, invalidePool.getActiveCount(key));
-        Assert.assertEquals(0, invalidePool.getIdleCount(key));
-        Assert.assertEquals(0, invalidePool.getPeakCount(key));
+        Assert.assertEquals(-1, invalidePool.getPoolSize(key));
+        Assert.assertEquals(-1, invalidePool.getActiveCount(key));
+        Assert.assertEquals(-1, invalidePool.getIdleCount(key));
+        Assert.assertEquals(-1, invalidePool.getPeakCount(key));
 
         // ensure failure
         try {
@@ -288,10 +288,10 @@ public class BaseObjectPoolTest {
         final ObjectPool<Integer, Integer> pool = builder.build();
 
         final int key = 1;
-        Assert.assertEquals(0, pool.getPoolSize(key));
-        Assert.assertEquals(0, pool.getActiveCount(key));
-        Assert.assertEquals(0, pool.getIdleCount(key));
-        Assert.assertEquals(0, pool.getPeakCount(key));
+        Assert.assertEquals(-1, pool.getPoolSize(key));
+        Assert.assertEquals(-1, pool.getActiveCount(key));
+        Assert.assertEquals(-1, pool.getIdleCount(key));
+        Assert.assertEquals(-1, pool.getPeakCount(key));
 
         final List<Integer> objects = new ArrayList<Integer>();
         for (int i = 0; i < 25; i++) {
@@ -368,10 +368,10 @@ public class BaseObjectPoolTest {
             Assert.fail(e.getMessage());
         }
 
-        Assert.assertEquals(0, pool.getPoolSize(key));
-        Assert.assertEquals(0, pool.getActiveCount(key));
-        Assert.assertEquals(0, pool.getIdleCount(key));
-        Assert.assertEquals(0, pool.getPeakCount(key));
+        Assert.assertEquals(-1, pool.getPoolSize(key));
+        Assert.assertEquals(-1, pool.getActiveCount(key));
+        Assert.assertEquals(-1, pool.getIdleCount(key));
+        Assert.assertEquals(-1, pool.getPeakCount(key));
 
         Assert.assertEquals(0, factory.sequence);
 

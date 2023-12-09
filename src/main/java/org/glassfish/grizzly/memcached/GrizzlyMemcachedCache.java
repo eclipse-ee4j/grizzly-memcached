@@ -2747,25 +2747,37 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     private void enableJMX() {
-        final GrizzlyJmxManager grizzlyJmxManager = GrizzlyJmxManager.instance();
-        if (grizzlyJmxManager == null) {
-            return;
+        try {
+            final GrizzlyJmxManager grizzlyJmxManager = GrizzlyJmxManager.instance();
+            if (grizzlyJmxManager == null) {
+                return;
+            }
+            final Object localManagementObject = createJmxManagementObject();
+            if (localManagementObject == null) {
+                return;
+            }
+            grizzlyJmxManager.registerAtRoot(localManagementObject);
+            jmxManager = grizzlyJmxManager;
+            managementObject = localManagementObject;
+        } catch (Exception e) {
+            if (logger.isLoggable(Level.WARNING)) {
+                logger.log(Level.WARNING, "failed to enable JMX. cache=" + this, e);
+            }
         }
-        final Object localManagementObject = createJmxManagementObject();
-        if (localManagementObject == null) {
-            return;
-        }
-        grizzlyJmxManager.registerAtRoot(localManagementObject);
-        jmxManager = grizzlyJmxManager;
-        managementObject = localManagementObject;
     }
 
     private void disableJMX() {
-        if (jmxManager != null && managementObject != null) {
-            jmxManager.deregister(managementObject);
+        try {
+            if (jmxManager != null && managementObject != null) {
+                jmxManager.deregister(managementObject);
+            }
+            managementObject = null;
+            jmxManager = null;
+        } catch (Exception e) {
+            if (logger.isLoggable(Level.WARNING)) {
+                logger.log(Level.WARNING, "failed to disable JMX. cache=" + this, e);
+            }
         }
-        managementObject = null;
-        jmxManager = null;
     }
 
     private class HealthMonitorTask implements Runnable {

@@ -20,6 +20,7 @@ import org.glassfish.gmbal.Description;
 import org.glassfish.gmbal.GmbalMBean;
 import org.glassfish.gmbal.Impact;
 import org.glassfish.gmbal.ManagedAttribute;
+import org.glassfish.gmbal.ManagedData;
 import org.glassfish.gmbal.ManagedObject;
 import org.glassfish.gmbal.ManagedOperation;
 import org.glassfish.gmbal.ParameterNames;
@@ -162,6 +163,15 @@ public class GrizzlyMemcachedCache extends JmxObject {
         return cache.getIdleCount(getAddress(hostname, port));
     }
 
+    @ManagedOperation(id = "grizzly-memcached-connection-stat", impact = Impact.INFO)
+    @Description("The stat of connections in this pool.")
+    @ParameterNames({"hostname","port"})
+    public CompositeConnectionStat getConnectionStat(final String hostname, final int port) {
+        final SocketAddress server = getAddress(hostname, port);
+        return new CompositeConnectionStat(cache.getConnectionSize(server), cache.getPeakCount(server),
+                                           cache.getActiveCount(server), cache.getIdleCount(server));
+    }
+
     @ManagedAttribute(id = "grizzly-memcached-cache-jmx-enabled")
     public boolean isJmxEnabled() {
         return cache.isJmxEnabled();
@@ -204,6 +214,32 @@ public class GrizzlyMemcachedCache extends JmxObject {
             return new InetSocketAddress(hostname, port);
         } catch(Exception ignore) {
             return null;
+        }
+    }
+
+    @ManagedData(name="Connection Stat")
+    private static class CompositeConnectionStat {
+        @ManagedAttribute(id = "connections")
+        @Description("The total number of connections currently idle and active in this pool or a negative value if unsupported.")
+        private final int connectionSize;
+
+        @ManagedAttribute(id = "peak")
+        @Description("The peak number of connections or a negative value if unsupported.")
+        private final int peakCount;
+
+        @ManagedAttribute(id = "active")
+        @Description("The number of connections currently borrowed in this pool or a negative value if unsupported.")
+        private final int activeCount;
+
+        @ManagedAttribute(id = "idle")
+        @Description("The number of connections currently idle in this pool or a negative value if unsupported.")
+        private final int idleCount;
+
+        private CompositeConnectionStat(int connectionSize, int peakCount, int activeCount, int idleCount) {
+            this.connectionSize = connectionSize;
+            this.peakCount = peakCount;
+            this.activeCount = activeCount;
+            this.idleCount = idleCount;
         }
     }
 }

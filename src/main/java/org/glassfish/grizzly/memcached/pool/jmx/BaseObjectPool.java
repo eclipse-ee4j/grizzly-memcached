@@ -17,6 +17,7 @@
 package org.glassfish.grizzly.memcached.pool.jmx;
 
 import org.glassfish.gmbal.ManagedAttribute;
+import org.glassfish.gmbal.ManagedData;
 import org.glassfish.grizzly.jmxbase.GrizzlyJmxManager;
 import org.glassfish.grizzly.monitoring.jmx.JmxObject;
 
@@ -106,6 +107,12 @@ public class BaseObjectPool extends JmxObject {
         return pool.getTotalIdleCount();
     }
 
+    @ManagedAttribute(id = "object-pool-stat")
+    public CompositeObjectPoolStat getPoolStat() {
+        return new CompositeObjectPoolStat(pool.getTotalPoolSize(), pool.getHighestPeakCount(),
+                                           pool.getTotalActiveCount(), pool.getTotalIdleCount());
+    }
+
     /**
      * @return the minimum size of this object pool per key.
      */
@@ -152,5 +159,33 @@ public class BaseObjectPool extends JmxObject {
     @ManagedAttribute(id = "object-pool-keys")
     public String getKeys() {
         return pool.getKeys();
+    }
+
+    @ManagedData(name = "Object Pool Stat")
+    private static class CompositeObjectPoolStat {
+        @ManagedAttribute(id = "total-pools")
+        @Description("The total number of instances for all keys managed by this object pool.")
+        private final int totalPoolSize;
+
+        @ManagedAttribute(id = "highest-peak")
+        @Description("The highest peak number of instances among all keys managed by this object pool.")
+        private final int highestPeakCount;
+
+        @ManagedAttribute(id = "total-active")
+        @Description(
+                "The total number of instances currently borrowed from but not yet returned to the pool for all keys managed by this object pool.")
+        private final int totalActiveCount;
+
+        @ManagedAttribute(id = "total-idle")
+        @Description("The total number of instances currently idle for all keys managed by this object pool.")
+        private final int totalIdleCount;
+
+        private CompositeObjectPoolStat(int totalPoolSize, int highestPeakCount, int totalActiveCount,
+                                        int totalIdleCount) {
+            this.totalPoolSize = totalPoolSize;
+            this.highestPeakCount = highestPeakCount;
+            this.totalActiveCount = totalActiveCount;
+            this.totalIdleCount = totalIdleCount;
+        }
     }
 }

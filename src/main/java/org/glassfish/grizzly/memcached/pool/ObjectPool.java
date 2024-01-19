@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2017 Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023 Oracle and/or its affiliates. All rights reserved.
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License v. 2.0, which is available at
@@ -15,6 +15,8 @@
  */
 
 package org.glassfish.grizzly.memcached.pool;
+
+import org.glassfish.grizzly.monitoring.MonitoringAware;
 
 import java.util.concurrent.TimeoutException;
 
@@ -53,7 +55,7 @@ import java.util.concurrent.TimeoutException;
  * }
  * @author Bongjae Chang
  */
-public interface ObjectPool<K, V> {
+public interface ObjectPool<K, V> extends MonitoringAware<ObjectPoolProbe> {
 
     /**
      * Create objects using the {@link PoolableObjectFactory factory} until pool's minimum size, and then place them in the idle object pool
@@ -155,7 +157,7 @@ public interface ObjectPool<K, V> {
     public int getPoolSize(final K key);
 
     /**
-     * Returns the total peak number of instances
+     * Returns the peak number of instances
      *
      * @param key the key to query
      * @return the peak number of instances corresponding to the given {@code key} or a negative value if unsupported
@@ -177,4 +179,32 @@ public interface ObjectPool<K, V> {
      * @return the number of instances corresponding to the given {@code key} currently idle in this pool or a negative value if unsupported
      */
     public int getIdleCount(final K key);
+
+    /**
+     * Returns the total number of instances for all keys
+     *
+     * @return the total number of instances for all keys managed by this object pool or a negative value if unsupported
+     */
+    public int getTotalPoolSize();
+
+    /**
+     * Returns the highest peak number of instances among all keys
+     *
+     * @return the highest peak number of instances among all keys managed by this object pool or a negative value if unsupported
+     */
+    public int getHighestPeakCount();
+
+    /**
+     * Returns the total number of instances currently borrowed from but not yet returned to the pool for all keys
+     *
+     * @return the total number of instances currently borrowed from but not yet returned to the pool for all keys or a negative value if unsupported
+     */
+    public int getTotalActiveCount();
+
+    /**
+     * Returns the total number of instances currently idle in this pool for all keys
+     *
+     * @return the total number of instances currently idle in this pool for all keys or a negative value if unsupported
+     */
+    public int getTotalIdleCount();
 }

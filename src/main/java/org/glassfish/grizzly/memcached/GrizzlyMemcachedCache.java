@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2017 Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2023 Oracle and/or its affiliates. All rights reserved.
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License v. 2.0, which is available at
@@ -27,6 +27,7 @@ import org.glassfish.grizzly.WriteResult;
 import org.glassfish.grizzly.attributes.Attribute;
 import org.glassfish.grizzly.attributes.AttributeHolder;
 import org.glassfish.grizzly.filterchain.FilterChain;
+import org.glassfish.grizzly.jmxbase.GrizzlyJmxManager;
 import org.glassfish.grizzly.memcached.pool.BaseObjectPool;
 import org.glassfish.grizzly.memcached.pool.NoValidObjectException;
 import org.glassfish.grizzly.memcached.pool.ObjectPool;
@@ -37,6 +38,9 @@ import org.glassfish.grizzly.memcached.zookeeper.CacheServerListBarrierListener;
 import org.glassfish.grizzly.memcached.zookeeper.PreferRemoteConfigBarrierListener;
 import org.glassfish.grizzly.memcached.zookeeper.ZKClient;
 import org.glassfish.grizzly.memcached.zookeeper.ZooKeeperSupportCache;
+import org.glassfish.grizzly.monitoring.DefaultMonitoringConfig;
+import org.glassfish.grizzly.monitoring.MonitoringConfig;
+import org.glassfish.grizzly.monitoring.MonitoringUtils;
 import org.glassfish.grizzly.nio.transport.TCPNIOConnectorHandler;
 import org.glassfish.grizzly.nio.transport.TCPNIOTransport;
 
@@ -87,22 +91,22 @@ import java.util.logging.Logger;
  * {@code
  * // creates a CacheManager
  * final GrizzlyMemcachedCacheManager manager = new GrizzlyMemcachedCacheManager.Builder().build();
- *
+ * <p>
  * // creates a CacheBuilder
  * final GrizzlyMemcachedCache.Builder<String, String> builder = manager.createCacheBuilder("USER");
  * // sets initial servers
  * builder.servers(initServerSet);
  * // creates the specific Cache
  * final MemcachedCache<String, String> userCache = builder.build();
- *
+ * <p>
  * // if you need to add another server
  * userCache.addServer(anotherServerAddress);
- *
+ * <p>
  * // cache operations
  * boolean result = userCache.set("name", "foo", expirationTimeoutInSec, false);
  * String value = userCache.get("name", false);
  * // ...
- *
+ * <p>
  * // shuts down
  * manager.shutdown();
  * }
@@ -145,6 +149,18 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
 
     private MemcachedClientFilter clientFilter;
 
+    private final boolean jmxEnabled;
+    private GrizzlyJmxManager jmxManager;
+    private Object managementObject;
+    private final DefaultMonitoringConfig<MemcachedCacheProbe> grizzlyMemcachedCacheMonitoringConfig =
+            new DefaultMonitoringConfig<MemcachedCacheProbe>(MemcachedCacheProbe.class) {
+
+                @Override
+                public Object createManagementObject() {
+                    return createJmxManagementObject();
+                }
+            };
+
     private GrizzlyMemcachedCache(Builder<K, V> builder) {
         this.cacheName = builder.cacheName;
         this.transport = builder.transport;
@@ -153,9 +169,9 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         this.responseTimeoutInMillis = builder.responseTimeoutInMillis;
         this.healthMonitorIntervalInSecs = builder.healthMonitorIntervalInSecs;
 
-        @SuppressWarnings("unchecked")
-        final BaseObjectPool.Builder<SocketAddress, Connection<SocketAddress>> connectionPoolBuilder =
-                new BaseObjectPool.Builder<SocketAddress, Connection<SocketAddress>>(new PoolableObjectFactory<SocketAddress, Connection<SocketAddress>>() {
+        @SuppressWarnings("unchecked") final BaseObjectPool.Builder<SocketAddress, Connection<SocketAddress>>
+                connectionPoolBuilder = new BaseObjectPool.Builder<SocketAddress, Connection<SocketAddress>>(
+                new PoolableObjectFactory<SocketAddress, Connection<SocketAddress>>() {
                     @Override
                     public Connection<SocketAddress> createObject(final SocketAddress key) throws Exception {
                         final ConnectorHandler<SocketAddress> connectorHandler =
@@ -211,7 +227,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                     }
 
                     @Override
-                    public void destroyObject(final SocketAddress key, final Connection<SocketAddress> value) throws Exception {
+                    public void destroyObject(final SocketAddress key, final Connection<SocketAddress> value)
+                            throws Exception {
                         if (value != null) {
                             if (value.isOpen()) {
                                 value.closeSilently();
@@ -221,17 +238,20 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                                 attributeHolder.removeAttribute(CONNECTION_POOL_ATTRIBUTE_NAME);
                             }
                             if (logger.isLoggable(Level.FINEST)) {
-                                logger.log(Level.FINEST, "the connection has been destroyed. key={0}, value={1}", new Object[]{key, value});
+                                logger.log(Level.FINEST, "the connection has been destroyed. key={0}, value={1}",
+                                           new Object[]{key, value});
                             }
                         }
                     }
 
                     @Override
-                    public boolean validateObject(final SocketAddress key, final Connection<SocketAddress> value) throws Exception {
+                    public boolean validateObject(final SocketAddress key, final Connection<SocketAddress> value)
+                            throws Exception {
                         return GrizzlyMemcachedCache.this.validateConnectionWithNoopCommand(value);
                         // or return GrizzlyMemcachedCache.this.validateConnectionWithVersionCommand(value);
                     }
                 });
+        connectionPoolBuilder.name(builder.cacheName + "-connectionPool");
         connectionPoolBuilder.min(builder.minConnectionPerServer);
         connectionPoolBuilder.max(builder.maxConnectionPerServer);
         connectionPoolBuilder.keepAliveTimeoutInSecs(builder.keepAliveTimeoutInSecs);
@@ -247,7 +267,9 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         if (failover && healthMonitorIntervalInSecs > 0) {
             healthMonitorTask = new HealthMonitorTask();
             scheduledExecutor = Executors.newSingleThreadScheduledExecutor();
-            scheduledFuture = scheduledExecutor.scheduleWithFixedDelay(healthMonitorTask, healthMonitorIntervalInSecs, healthMonitorIntervalInSecs, TimeUnit.SECONDS);
+            scheduledFuture = scheduledExecutor
+                    .scheduleWithFixedDelay(healthMonitorTask, healthMonitorIntervalInSecs, healthMonitorIntervalInSecs,
+                                            TimeUnit.SECONDS);
         } else {
             healthMonitorTask = null;
             scheduledExecutor = null;
@@ -261,6 +283,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             this.zkListener = new CacheServerListBarrierListener(this, servers);
         }
         this.zkClient = builder.zkClient;
+
+        this.jmxEnabled = builder.jmxEnabled;
     }
 
     /**
@@ -288,7 +312,9 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 }
             } else {
                 if (logger.isLoggable(Level.INFO)) {
-                    logger.log(Level.INFO, "local config has been ignored because preferRemoteConfig is true. servers={0}", servers);
+                    logger.log(Level.INFO,
+                               "local config has been ignored because preferRemoteConfig is true. servers={0}",
+                               servers);
                 }
             }
             // need to initialize the remote server with local initalServers if the remote server data is empty?
@@ -298,6 +324,9 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             for (final SocketAddress address : servers) {
                 addServer(address);
             }
+        }
+        if (jmxEnabled) {
+            enableJMX();
         }
     }
 
@@ -320,6 +349,9 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         if (zkClient != null) {
             zkClient.unregisterBarrier(cacheName);
         }
+        if (jmxEnabled) {
+            disableJMX();
+        }
     }
 
     /**
@@ -341,7 +373,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 connectionPool.createAllMinObjects(serverAddress);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to create min connections in the pool. address=" + serverAddress, e);
+                    logger.log(Level.SEVERE, "failed to create min connections in the pool. address=" + serverAddress,
+                               e);
                 }
                 try {
                     connectionPool.destroy(serverAddress);
@@ -378,14 +411,16 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 consistentHash.remove(serverAddress);
                 servers.remove(serverAddress);
                 if (logger.isLoggable(Level.INFO)) {
-                    logger.log(Level.INFO, "removed the server from the consistent hash successfully. address={0}", serverAddress);
+                    logger.log(Level.INFO, "removed the server from the consistent hash successfully. address={0}",
+                               serverAddress);
                 }
             }
         } else {
             consistentHash.remove(serverAddress);
             servers.remove(serverAddress);
             if (logger.isLoggable(Level.INFO)) {
-                logger.log(Level.INFO, "removed the server from the consistent hash successfully. address={0}", serverAddress);
+                logger.log(Level.INFO, "removed the server from the consistent hash successfully. address={0}",
+                           serverAddress);
             }
         }
         if (connectionPool != null) {
@@ -518,6 +553,14 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         return cacheName;
     }
 
+    public TCPNIOTransport getTransport() {
+        return transport;
+    }
+
+    public ObjectPool<SocketAddress, Connection<SocketAddress>> getConnectionPool() {
+        return connectionPool;
+    }
+
     @Override
     public boolean set(final K key, final V value, final int expirationInSecs, final boolean noReply) {
         return set(key, value, expirationInSecs, noReply, writeTimeoutInMillis, responseTimeoutInMillis);
@@ -525,7 +568,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean set(final K key, final V value, final int expirationInSecs, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean set(final K key, final V value, final int expirationInSecs, final boolean noReply,
+                       final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         if (key == null || value == null) {
             return false;
         }
@@ -584,21 +628,25 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public Map<K, Boolean> setMulti(final Map<K, V> map, final int expirationInSecs, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public Map<K, Boolean> setMulti(final Map<K, V> map, final int expirationInSecs, final long writeTimeoutInMillis,
+                                    final long responseTimeoutInMillis) {
         final Map<K, Boolean> result = new HashMap<K, Boolean>();
         if (map == null || map.isEmpty()) {
             return result;
         }
 
         // categorize keys by address
-        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap = new HashMap<SocketAddress, List<BufferWrapper<K>>>();
+        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap =
+                new HashMap<SocketAddress, List<BufferWrapper<K>>>();
         for (K key : map.keySet()) {
             final BufferWrapper<K> keyWrapper = BufferWrapper.wrap(key, transport.getMemoryManager());
             final Buffer keyBuffer = keyWrapper.getBuffer();
             final SocketAddress address = consistentHash.get(keyBuffer.toByteBuffer());
             if (address == null) {
                 if (logger.isLoggable(Level.WARNING)) {
-                    logger.log(Level.WARNING, "failed to get the address from the consistent hash in setMulti(). key buffer={0}", keyBuffer);
+                    logger.log(Level.WARNING,
+                               "failed to get the address from the consistent hash in setMulti(). key buffer={0}",
+                               keyBuffer);
                 }
                 keyWrapper.recycle();
                 continue;
@@ -616,19 +664,24 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             final SocketAddress address = entry.getKey();
             final List<BufferWrapper<K>> keyList = entry.getValue();
             try {
-                sendSetMulti(entry.getKey(), keyList, map, expirationInSecs, writeTimeoutInMillis, responseTimeoutInMillis, result);
+                sendSetMulti(entry.getKey(), keyList, map, expirationInSecs, writeTimeoutInMillis,
+                             responseTimeoutInMillis, result);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute setMulti(). address=" + address + ", keySize=" + keyList.size(), ie);
+                    logger.log(Level.SEVERE,
+                               "failed to execute setMulti(). address=" + address + ", keySize=" + keyList.size(), ie);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute setMulti(). address=" + address + ", keyList=" + keyList, ie);
+                    logger.log(Level.FINER, "failed to execute setMulti(). address=" + address + ", keyList=" + keyList,
+                               ie);
                 }
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute setMulti(). address=" + address + ", keySize=" + keyList.size(), e);
+                    logger.log(Level.SEVERE,
+                               "failed to execute setMulti(). address=" + address + ", keySize=" + keyList.size(), e);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute setMulti(). address=" + address + ", keyList=" + keyList, e);
+                    logger.log(Level.FINER, "failed to execute setMulti(). address=" + address + ", keyList=" + keyList,
+                               e);
                 }
             } finally {
                 recycleBufferWrappers(keyList);
@@ -643,7 +696,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean add(final K key, final V value, final int expirationInSecs, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean add(final K key, final V value, final int expirationInSecs, final boolean noReply,
+                       final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         if (key == null || value == null) {
             return false;
         }
@@ -702,7 +756,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean replace(final K key, final V value, final int expirationInSecs, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean replace(final K key, final V value, final int expirationInSecs, final boolean noReply,
+                           final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         if (key == null || value == null) {
             return false;
         }
@@ -761,7 +816,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean cas(final K key, final V value, final int expirationInSecs, final long cas, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean cas(final K key, final V value, final int expirationInSecs, final long cas, final boolean noReply,
+                       final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         if (key == null || value == null) {
             return false;
         }
@@ -821,21 +877,25 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public Map<K, Boolean> casMulti(final Map<K, ValueWithCas<V>> map, final int expirationInSecs, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public Map<K, Boolean> casMulti(final Map<K, ValueWithCas<V>> map, final int expirationInSecs,
+                                    final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         final Map<K, Boolean> result = new HashMap<K, Boolean>();
         if (map == null || map.isEmpty()) {
             return result;
         }
 
         // categorize keys by address
-        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap = new HashMap<SocketAddress, List<BufferWrapper<K>>>();
+        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap =
+                new HashMap<SocketAddress, List<BufferWrapper<K>>>();
         for (K key : map.keySet()) {
             final BufferWrapper<K> keyWrapper = BufferWrapper.wrap(key, transport.getMemoryManager());
             final Buffer keyBuffer = keyWrapper.getBuffer();
             final SocketAddress address = consistentHash.get(keyBuffer.toByteBuffer());
             if (address == null) {
                 if (logger.isLoggable(Level.WARNING)) {
-                    logger.log(Level.WARNING, "failed to get the address from the consistent hash in casMulti(). key buffer={0}", keyBuffer);
+                    logger.log(Level.WARNING,
+                               "failed to get the address from the consistent hash in casMulti(). key buffer={0}",
+                               keyBuffer);
                 }
                 keyWrapper.recycle();
                 continue;
@@ -853,19 +913,24 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             final SocketAddress address = entry.getKey();
             final List<BufferWrapper<K>> keyList = entry.getValue();
             try {
-                sendCasMulti(entry.getKey(), keyList, map, expirationInSecs, writeTimeoutInMillis, responseTimeoutInMillis, result);
+                sendCasMulti(entry.getKey(), keyList, map, expirationInSecs, writeTimeoutInMillis,
+                             responseTimeoutInMillis, result);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute casMulti(). address=" + address + ", keySize=" + keyList.size(), ie);
+                    logger.log(Level.SEVERE,
+                               "failed to execute casMulti(). address=" + address + ", keySize=" + keyList.size(), ie);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute casMulti(). address=" + address + ", keyList=" + keyList, ie);
+                    logger.log(Level.FINER, "failed to execute casMulti(). address=" + address + ", keyList=" + keyList,
+                               ie);
                 }
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute casMulti(). address=" + address + ", keySize=" + keyList.size(), e);
+                    logger.log(Level.SEVERE,
+                               "failed to execute casMulti(). address=" + address + ", keySize=" + keyList.size(), e);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute casMulti(). address=" + address + ", keyList=" + keyList, e);
+                    logger.log(Level.FINER, "failed to execute casMulti(). address=" + address + ", keyList=" + keyList,
+                               e);
                 }
             } finally {
                 recycleBufferWrappers(keyList);
@@ -880,7 +945,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean append(final K key, final V value, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean append(final K key, final V value, final boolean noReply, final long writeTimeoutInMillis,
+                          final long responseTimeoutInMillis) {
         if (key == null || value == null) {
             return false;
         }
@@ -937,7 +1003,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean prepend(final K key, final V value, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean prepend(final K key, final V value, final boolean noReply, final long writeTimeoutInMillis,
+                           final long responseTimeoutInMillis) {
         if (key == null || value == null) {
             return false;
         }
@@ -1001,14 +1068,17 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         }
 
         // categorize keys by address
-        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap = new HashMap<SocketAddress, List<BufferWrapper<K>>>();
+        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap =
+                new HashMap<SocketAddress, List<BufferWrapper<K>>>();
         for (K key : keys) {
             final BufferWrapper<K> keyWrapper = BufferWrapper.wrap(key, transport.getMemoryManager());
             final Buffer keyBuffer = keyWrapper.getBuffer();
             final SocketAddress address = consistentHash.get(keyBuffer.toByteBuffer());
             if (address == null) {
                 if (logger.isLoggable(Level.WARNING)) {
-                    logger.log(Level.WARNING, "failed to get the address from the consistent hash in getMulti(). key buffer={0}", keyBuffer);
+                    logger.log(Level.WARNING,
+                               "failed to get the address from the consistent hash in getMulti(). key buffer={0}",
+                               keyBuffer);
                 }
                 keyWrapper.recycle();
                 continue;
@@ -1030,15 +1100,19 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute getMulti(). address=" + address + ", keySize=" + keyList.size(), ie);
+                    logger.log(Level.SEVERE,
+                               "failed to execute getMulti(). address=" + address + ", keySize=" + keyList.size(), ie);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute getMulti(). address=" + address + ", keyList=" + keyList, ie);
+                    logger.log(Level.FINER, "failed to execute getMulti(). address=" + address + ", keyList=" + keyList,
+                               ie);
                 }
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute getMulti(). address=" + address + ", keySize=" + keyList.size(), e);
+                    logger.log(Level.SEVERE,
+                               "failed to execute getMulti(). address=" + address + ", keySize=" + keyList.size(), e);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute getMulti(). address=" + address + ", keyList=" + keyList, e);
+                    logger.log(Level.FINER, "failed to execute getMulti(). address=" + address + ", keyList=" + keyList,
+                               e);
                 }
             } finally {
                 recycleBufferWrappers(keyList);
@@ -1054,7 +1128,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
 
     @SuppressWarnings("unchecked")
     @Override
-    public V get(final K key, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public V get(final K key, final boolean noReply, final long writeTimeoutInMillis,
+                 final long responseTimeoutInMillis) {
         if (key == null) {
             return null;
         }
@@ -1104,7 +1179,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
 
     @SuppressWarnings("unchecked")
     @Override
-    public ValueWithKey<K, V> getKey(final K key, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public ValueWithKey<K, V> getKey(final K key, final boolean noReply, final long writeTimeoutInMillis,
+                                     final long responseTimeoutInMillis) {
         if (key == null) {
             return null;
         }
@@ -1154,7 +1230,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
 
     @SuppressWarnings("unchecked")
     @Override
-    public ValueWithCas<V> gets(final K key, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public ValueWithCas<V> gets(final K key, final boolean noReply, final long writeTimeoutInMillis,
+                                final long responseTimeoutInMillis) {
         if (key == null) {
             return null;
         }
@@ -1203,21 +1280,25 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public Map<K, ValueWithCas<V>> getsMulti(final Set<K> keys, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public Map<K, ValueWithCas<V>> getsMulti(final Set<K> keys, final long writeTimeoutInMillis,
+                                             final long responseTimeoutInMillis) {
         final Map<K, ValueWithCas<V>> result = new HashMap<K, ValueWithCas<V>>();
         if (keys == null || keys.isEmpty()) {
             return result;
         }
 
         // categorize keys by address
-        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap = new HashMap<SocketAddress, List<BufferWrapper<K>>>();
+        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap =
+                new HashMap<SocketAddress, List<BufferWrapper<K>>>();
         for (K key : keys) {
             final BufferWrapper<K> keyWrapper = BufferWrapper.wrap(key, transport.getMemoryManager());
             final Buffer keyBuffer = keyWrapper.getBuffer();
             final SocketAddress address = consistentHash.get(keyBuffer.toByteBuffer());
             if (address == null) {
                 if (logger.isLoggable(Level.WARNING)) {
-                    logger.log(Level.WARNING, "failed to get the address from the consistent hash in getsMulti(). key buffer={0}", keyBuffer);
+                    logger.log(Level.WARNING,
+                               "failed to get the address from the consistent hash in getsMulti(). key buffer={0}",
+                               keyBuffer);
                 }
                 keyWrapper.recycle();
                 continue;
@@ -1239,15 +1320,19 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute getsMulti(). address=" + address + ", keySize=" + keyList.size(), ie);
+                    logger.log(Level.SEVERE,
+                               "failed to execute getsMulti(). address=" + address + ", keySize=" + keyList.size(), ie);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute getsMulti(). address=" + address + ", keyList=" + keyList, ie);
+                    logger.log(Level.FINER,
+                               "failed to execute getsMulti(). address=" + address + ", keyList=" + keyList, ie);
                 }
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute getsMulti(). address=" + address + ", keySize=" + keyList.size(), e);
+                    logger.log(Level.SEVERE,
+                               "failed to execute getsMulti(). address=" + address + ", keySize=" + keyList.size(), e);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute getsMulti(). address=" + address + ", keyList=" + keyList, e);
+                    logger.log(Level.FINER,
+                               "failed to execute getsMulti(). address=" + address + ", keyList=" + keyList, e);
                 }
             } finally {
                 recycleBufferWrappers(keyList);
@@ -1263,7 +1348,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
 
     @SuppressWarnings("unchecked")
     @Override
-    public V gat(final K key, final int expirationInSecs, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public V gat(final K key, final int expirationInSecs, final boolean noReply, final long writeTimeoutInMillis,
+                 final long responseTimeoutInMillis) {
         if (key == null) {
             return null;
         }
@@ -1313,7 +1399,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean delete(final K key, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean delete(final K key, final boolean noReply, final long writeTimeoutInMillis,
+                          final long responseTimeoutInMillis) {
         if (key == null) {
             return false;
         }
@@ -1367,21 +1454,25 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public Map<K, Boolean> deleteMulti(final Set<K> keys, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public Map<K, Boolean> deleteMulti(final Set<K> keys, final long writeTimeoutInMillis,
+                                       final long responseTimeoutInMillis) {
         final Map<K, Boolean> result = new HashMap<K, Boolean>();
         if (keys == null || keys.isEmpty()) {
             return result;
         }
 
         // categorize keys by address
-        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap = new HashMap<SocketAddress, List<BufferWrapper<K>>>();
+        final Map<SocketAddress, List<BufferWrapper<K>>> categorizedMap =
+                new HashMap<SocketAddress, List<BufferWrapper<K>>>();
         for (K key : keys) {
             final BufferWrapper<K> keyWrapper = BufferWrapper.wrap(key, transport.getMemoryManager());
             final Buffer keyBuffer = keyWrapper.getBuffer();
             final SocketAddress address = consistentHash.get(keyBuffer.toByteBuffer());
             if (address == null) {
                 if (logger.isLoggable(Level.WARNING)) {
-                    logger.log(Level.WARNING, "failed to get the address from the consistent hash in deleteMulti(). key buffer={0}", keyBuffer);
+                    logger.log(Level.WARNING,
+                               "failed to get the address from the consistent hash in deleteMulti(). key buffer={0}",
+                               keyBuffer);
                 }
                 keyWrapper.recycle();
                 continue;
@@ -1403,15 +1494,21 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute deleteMulti(). address=" + address + ", keySize=" + keyList.size(), ie);
+                    logger.log(Level.SEVERE,
+                               "failed to execute deleteMulti(). address=" + address + ", keySize=" + keyList.size(),
+                               ie);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute deleteMulti(). address=" + address + ", keyList=" + keyList, ie);
+                    logger.log(Level.FINER,
+                               "failed to execute deleteMulti(). address=" + address + ", keyList=" + keyList, ie);
                 }
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to execute deleteMulti(). address=" + address + ", keySize=" + keyList.size(), e);
+                    logger.log(Level.SEVERE,
+                               "failed to execute deleteMulti(). address=" + address + ", keySize=" + keyList.size(),
+                               e);
                 } else if (logger.isLoggable(Level.FINER)) {
-                    logger.log(Level.FINER, "failed to execute deleteMulti(). address=" + address + ", keyList=" + keyList, e);
+                    logger.log(Level.FINER,
+                               "failed to execute deleteMulti(). address=" + address + ", keyList=" + keyList, e);
                 }
             } finally {
                 recycleBufferWrappers(keyList);
@@ -1421,12 +1518,14 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public long incr(final K key, final long delta, final long initial, final int expirationInSecs, final boolean noReply) {
+    public long incr(final K key, final long delta, final long initial, final int expirationInSecs,
+                     final boolean noReply) {
         return incr(key, delta, initial, expirationInSecs, noReply, writeTimeoutInMillis, responseTimeoutInMillis);
     }
 
     @Override
-    public long incr(final K key, final long delta, final long initial, final int expirationInSecs, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public long incr(final K key, final long delta, final long initial, final int expirationInSecs,
+                     final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         if (key == null) {
             return -1;
         }
@@ -1478,12 +1577,14 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public long decr(final K key, final long delta, final long initial, final int expirationInSecs, final boolean noReply) {
+    public long decr(final K key, final long delta, final long initial, final int expirationInSecs,
+                     final boolean noReply) {
         return decr(key, delta, initial, expirationInSecs, noReply, writeTimeoutInMillis, responseTimeoutInMillis);
     }
 
     @Override
-    public long decr(final K key, final long delta, final long initial, final int expirationInSecs, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public long decr(final K key, final long delta, final long initial, final int expirationInSecs,
+                     final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         if (key == null) {
             return -1;
         }
@@ -1540,7 +1641,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public String saslAuth(final SocketAddress address, final String mechanism, final byte[] data, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public String saslAuth(final SocketAddress address, final String mechanism, final byte[] data,
+                           final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         throw new UnsupportedOperationException();
     }
 
@@ -1550,7 +1652,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public String saslStep(final SocketAddress address, final String mechanism, final byte[] data, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public String saslStep(final SocketAddress address, final String mechanism, final byte[] data,
+                           final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         throw new UnsupportedOperationException();
     }
 
@@ -1560,7 +1663,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public String saslList(final SocketAddress address, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public String saslList(final SocketAddress address, final long writeTimeoutInMillis,
+                           final long responseTimeoutInMillis) {
         throw new UnsupportedOperationException();
     }
 
@@ -1570,7 +1674,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public Map<String, String> stats(final SocketAddress address, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public Map<String, String> stats(final SocketAddress address, final long writeTimeoutInMillis,
+                                     final long responseTimeoutInMillis) {
         return statsItems(address, null, writeTimeoutInMillis, responseTimeoutInMillis);
     }
 
@@ -1581,7 +1686,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
 
     @SuppressWarnings("unchecked")
     @Override
-    public Map<String, String> statsItems(final SocketAddress address, final String item, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public Map<String, String> statsItems(final SocketAddress address, final String item,
+                                          final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         if (address == null) {
             return null;
         }
@@ -1609,27 +1715,36 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             connection = connectionPool.borrowObject(address, connectTimeoutInMillis);
         } catch (PoolExhaustedException pee) {
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", pee);
+                logger.log(Level.SEVERE,
+                           "failed to get the stats. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms",
+                           pee);
             }
             return null;
         } catch (NoValidObjectException nvoe) {
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", nvoe);
+                logger.log(Level.SEVERE,
+                           "failed to get the stats. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms",
+                           nvoe);
             }
             return null;
         } catch (TimeoutException te) {
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", te);
+                logger.log(Level.SEVERE,
+                           "failed to get the stats. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms",
+                           te);
             }
             return null;
         } catch (InterruptedException ie) {
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", ie);
+                logger.log(Level.SEVERE,
+                           "failed to get the stats. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms",
+                           ie);
             }
             return null;
         }
         try {
-            final GrizzlyFuture<WriteResult<MemcachedRequest[], SocketAddress>> future = connection.write(new MemcachedRequest[]{request});
+            final GrizzlyFuture<WriteResult<MemcachedRequest[], SocketAddress>> future =
+                    connection.write(new MemcachedRequest[]{request});
             try {
                 if (writeTimeoutInMillis > 0) {
                     future.get(writeTimeoutInMillis, TimeUnit.MILLISECONDS);
@@ -1638,18 +1753,21 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 }
             } catch (ExecutionException ee) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", request=" + request, ee);
+                    logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", request=" + request,
+                               ee);
                 }
                 return null;
             } catch (TimeoutException te) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", request=" + request, te);
+                    logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", request=" + request,
+                               te);
                 }
                 return null;
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", request=" + request, ie);
+                    logger.log(Level.SEVERE, "failed to get the stats. address=" + address + ", request=" + request,
+                               ie);
                 }
                 return null;
             } finally {
@@ -1663,12 +1781,14 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                     value = clientFilter.getCorrelatedResponse(connection, request, responseTimeoutInMillis);
                 } catch (TimeoutException te) {
                     if (logger.isLoggable(Level.SEVERE)) {
-                        logger.log(Level.SEVERE, "failed to get the stats. timeout=" + responseTimeoutInMillis + "ms", te);
+                        logger.log(Level.SEVERE, "failed to get the stats. timeout=" + responseTimeoutInMillis + "ms",
+                                   te);
                     }
                     break;
                 } catch (InterruptedException ie) {
                     if (logger.isLoggable(Level.SEVERE)) {
-                        logger.log(Level.SEVERE, "failed to get the stats. timeout=" + responseTimeoutInMillis + "ms", ie);
+                        logger.log(Level.SEVERE, "failed to get the stats. timeout=" + responseTimeoutInMillis + "ms",
+                                   ie);
                     }
                     break;
                 }
@@ -1696,7 +1816,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean quit(final SocketAddress address, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean quit(final SocketAddress address, final boolean noReply, final long writeTimeoutInMillis,
+                        final long responseTimeoutInMillis) {
         if (address == null) {
             return false;
         }
@@ -1739,7 +1860,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean flushAll(final SocketAddress address, final int expirationInSecs, final boolean noReply, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean flushAll(final SocketAddress address, final int expirationInSecs, final boolean noReply,
+                            final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
         if (address == null) {
             return false;
         }
@@ -1783,7 +1905,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean touch(final K key, final int expirationInSecs, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean touch(final K key, final int expirationInSecs, final long writeTimeoutInMillis,
+                         final long responseTimeoutInMillis) {
         if (key == null) {
             return false;
         }
@@ -1832,7 +1955,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean noop(final SocketAddress address, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean noop(final SocketAddress address, final long writeTimeoutInMillis,
+                        final long responseTimeoutInMillis) {
         if (address == null) {
             return false;
         }
@@ -1852,12 +1976,14 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to execute the noop operation. address=" + address + ", request=" + request, ie);
+                logger.log(Level.SEVERE,
+                           "failed to execute the noop operation. address=" + address + ", request=" + request, ie);
             }
             return false;
         } catch (Exception e) {
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to execute the noop operation. address=" + address + ", request=" + request, e);
+                logger.log(Level.SEVERE,
+                           "failed to execute the noop operation. address=" + address + ", request=" + request, e);
             }
             return false;
         } finally {
@@ -1871,7 +1997,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public boolean verbosity(final SocketAddress address, final int verbosity, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public boolean verbosity(final SocketAddress address, final int verbosity, final long writeTimeoutInMillis,
+                             final long responseTimeoutInMillis) {
         if (address == null) {
             return false;
         }
@@ -1891,12 +2018,14 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to execute the vebosity operation. address=" + address + ", request=" + request, ie);
+                logger.log(Level.SEVERE,
+                           "failed to execute the vebosity operation. address=" + address + ", request=" + request, ie);
             }
             return false;
         } catch (Exception e) {
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to execute the vebosity operation. address=" + address + ", request=" + request, e);
+                logger.log(Level.SEVERE,
+                           "failed to execute the vebosity operation. address=" + address + ", request=" + request, e);
             }
             return false;
         } finally {
@@ -1910,7 +2039,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
     }
 
     @Override
-    public String version(final SocketAddress address, final long writeTimeoutInMillis, final long responseTimeoutInMillis) {
+    public String version(final SocketAddress address, final long writeTimeoutInMillis,
+                          final long responseTimeoutInMillis) {
         if (address == null) {
             return null;
         }
@@ -1929,12 +2059,14 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to execute the version operation. address=" + address + ", request=" + request, ie);
+                logger.log(Level.SEVERE,
+                           "failed to execute the version operation. address=" + address + ", request=" + request, ie);
             }
             return null;
         } catch (Exception e) {
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to execute the version operation. address=" + address + ", request=" + request, e);
+                logger.log(Level.SEVERE,
+                           "failed to execute the version operation. address=" + address + ", request=" + request, e);
             }
             return null;
         } finally {
@@ -1953,7 +2085,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         final MemcachedRequest request = builder.build();
 
         try {
-            final GrizzlyFuture<WriteResult<MemcachedRequest[], SocketAddress>> future = connection.write(new MemcachedRequest[]{request});
+            final GrizzlyFuture<WriteResult<MemcachedRequest[], SocketAddress>> future =
+                    connection.write(new MemcachedRequest[]{request});
             if (writeTimeoutInMillis > 0) {
                 future.get(writeTimeoutInMillis, TimeUnit.MILLISECONDS);
             } else {
@@ -1968,12 +2101,16 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to execute the noop operation. connection=" + connection + ", request=" + request, ie);
+                logger.log(Level.SEVERE,
+                           "failed to execute the noop operation. connection=" + connection + ", request=" + request,
+                           ie);
             }
             return false;
         } catch (Exception e) {
             if (logger.isLoggable(Level.SEVERE)) {
-                logger.log(Level.SEVERE, "failed to execute the noop operation. connection=" + connection + ", request=" + request, e);
+                logger.log(Level.SEVERE,
+                           "failed to execute the noop operation. connection=" + connection + ", request=" + request,
+                           e);
             }
             return false;
         } finally {
@@ -1991,7 +2128,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         final MemcachedRequest request = builder.build();
 
         try {
-            final GrizzlyFuture<WriteResult<MemcachedRequest[], SocketAddress>> future = connection.write(new MemcachedRequest[]{request});
+            final GrizzlyFuture<WriteResult<MemcachedRequest[], SocketAddress>> future =
+                    connection.write(new MemcachedRequest[]{request});
             if (writeTimeoutInMillis > 0) {
                 future.get(writeTimeoutInMillis, TimeUnit.MILLISECONDS);
             } else {
@@ -2040,59 +2178,74 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             connection = connectionPool.borrowObject(address, connectTimeoutInMillis);
         } catch (PoolExhaustedException pee) {
             if (logger.isLoggable(Level.FINER)) {
-                logger.log(Level.FINER, "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", pee);
+                logger.log(Level.FINER,
+                           "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis +
+                           "ms", pee);
             }
             throw pee;
         } catch (NoValidObjectException nvoe) {
             if (logger.isLoggable(Level.FINER)) {
-                logger.log(Level.FINER, "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", nvoe);
+                logger.log(Level.FINER,
+                           "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis +
+                           "ms", nvoe);
             }
             removeServer(address, false);
             throw nvoe;
         } catch (TimeoutException te) {
             if (logger.isLoggable(Level.FINER)) {
-                logger.log(Level.FINER, "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", te);
+                logger.log(Level.FINER,
+                           "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis +
+                           "ms", te);
             }
             throw te;
         } catch (InterruptedException ie) {
             if (logger.isLoggable(Level.FINER)) {
-                logger.log(Level.FINER, "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", ie);
+                logger.log(Level.FINER,
+                           "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis +
+                           "ms", ie);
             }
             throw ie;
         }
         if (request.isNoReply()) {
-            connection.write(new MemcachedRequest[]{request}, new CompletionHandler<WriteResult<MemcachedRequest[], SocketAddress>>() {
-                @Override
-                public void cancelled() {
-                    returnConnectionSafely(address, connection);
-                    if (logger.isLoggable(Level.SEVERE)) {
-                        logger.log(Level.SEVERE, "failed to send the request. request={0}, connection={1}", new Object[]{request, connection});
-                    }
-                }
+            connection.write(new MemcachedRequest[]{request},
+                             new CompletionHandler<WriteResult<MemcachedRequest[], SocketAddress>>() {
+                                 @Override
+                                 public void cancelled() {
+                                     returnConnectionSafely(address, connection);
+                                     if (logger.isLoggable(Level.SEVERE)) {
+                                         logger.log(Level.SEVERE,
+                                                    "failed to send the request. request={0}, connection={1}",
+                                                    new Object[]{request, connection});
+                                     }
+                                 }
 
-                @Override
-                public void failed(Throwable t) {
-                    try {
-                        connectionPool.removeObject(address, connection);
-                    } catch (Exception e) {
-                        if (logger.isLoggable(Level.SEVERE)) {
-                            logger.log(Level.SEVERE, "failed to remove the connection. address=" + address + ", connection=" + connection, e);
-                        }
-                    }
-                    if (logger.isLoggable(Level.SEVERE)) {
-                        logger.log(Level.SEVERE, "failed to send the request. request=" + request + ", connection=" + connection, t);
-                    }
-                }
+                                 @Override
+                                 public void failed(Throwable t) {
+                                     try {
+                                         connectionPool.removeObject(address, connection);
+                                     } catch (Exception e) {
+                                         if (logger.isLoggable(Level.SEVERE)) {
+                                             logger.log(Level.SEVERE,
+                                                        "failed to remove the connection. address=" + address +
+                                                        ", connection=" + connection, e);
+                                         }
+                                     }
+                                     if (logger.isLoggable(Level.SEVERE)) {
+                                         logger.log(Level.SEVERE,
+                                                    "failed to send the request. request=" + request + ", connection=" +
+                                                    connection, t);
+                                     }
+                                 }
 
-                @Override
-                public void completed(WriteResult<MemcachedRequest[], SocketAddress> result) {
-                    returnConnectionSafely(address, connection);
-                }
+                                 @Override
+                                 public void completed(WriteResult<MemcachedRequest[], SocketAddress> result) {
+                                     returnConnectionSafely(address, connection);
+                                 }
 
-                @Override
-                public void updated(WriteResult<MemcachedRequest[], SocketAddress> result) {
-                }
-            });
+                                 @Override
+                                 public void updated(WriteResult<MemcachedRequest[], SocketAddress> result) {
+                                 }
+                             });
         }
     }
 
@@ -2128,10 +2281,10 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         return true;
     }
 
-    private Object send(final SocketAddress address,
-                        final MemcachedRequest request,
-                        final long writeTimeoutInMillis,
-                        final long responseTimeoutInMillis) throws TimeoutException, InterruptedException, PoolExhaustedException, NoValidObjectException, ExecutionException {
+    private Object send(final SocketAddress address, final MemcachedRequest request, final long writeTimeoutInMillis,
+                        final long responseTimeoutInMillis)
+            throws TimeoutException, InterruptedException, PoolExhaustedException, NoValidObjectException,
+                   ExecutionException {
         if (address == null) {
             throw new IllegalArgumentException("address must not be null");
         }
@@ -2141,14 +2294,15 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         if (request.isNoReply()) {
             throw new IllegalStateException("request type is no reply");
         }
-        return sendInternal(address, new MemcachedRequest[]{request}, writeTimeoutInMillis, responseTimeoutInMillis, null);
+        return sendInternal(address, new MemcachedRequest[]{request}, writeTimeoutInMillis, responseTimeoutInMillis,
+                            null);
     }
 
-    private void sendGetMulti(final SocketAddress address,
-                                   final List<BufferWrapper<K>> keyList,
-                                   final long writeTimeoutInMillis,
-                                   final long responseTimeoutInMillis,
-                                   final Map<K, V> result) throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException, NoValidObjectException {
+    private void sendGetMulti(final SocketAddress address, final List<BufferWrapper<K>> keyList,
+                              final long writeTimeoutInMillis, final long responseTimeoutInMillis,
+                              final Map<K, V> result)
+            throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException,
+                   NoValidObjectException {
         if (address == null || keyList == null || keyList.isEmpty() || result == null) {
             return;
         }
@@ -2175,11 +2329,11 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         sendInternal(address, requests, writeTimeoutInMillis, responseTimeoutInMillis, result);
     }
 
-    private void sendGetsMulti(final SocketAddress address,
-                               final List<BufferWrapper<K>> keyList,
-                               final long writeTimeoutInMillis,
-                               final long responseTimeoutInMillis,
-                               final Map<K, ValueWithCas<V>> result) throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException, NoValidObjectException {
+    private void sendGetsMulti(final SocketAddress address, final List<BufferWrapper<K>> keyList,
+                               final long writeTimeoutInMillis, final long responseTimeoutInMillis,
+                               final Map<K, ValueWithCas<V>> result)
+            throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException,
+                   NoValidObjectException {
         if (address == null || keyList == null || keyList.isEmpty() || result == null) {
             return;
         }
@@ -2206,13 +2360,11 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         sendInternal(address, requests, writeTimeoutInMillis, responseTimeoutInMillis, result);
     }
 
-    private void sendSetMulti(final SocketAddress address,
-                                         final List<BufferWrapper<K>> keyList,
-                                         final Map<K, V> map,
-                                         final int expirationInSecs,
-                                         final long writeTimeoutInMillis,
-                                         final long responseTimeoutInMillis,
-                                         final Map<K, Boolean> result) throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException, NoValidObjectException {
+    private void sendSetMulti(final SocketAddress address, final List<BufferWrapper<K>> keyList, final Map<K, V> map,
+                              final int expirationInSecs, final long writeTimeoutInMillis,
+                              final long responseTimeoutInMillis, final Map<K, Boolean> result)
+            throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException,
+                   NoValidObjectException {
         if (address == null || keyList == null || keyList.isEmpty() || result == null) {
             return;
         }
@@ -2246,13 +2398,12 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         sendInternal(address, requests, writeTimeoutInMillis, responseTimeoutInMillis, result);
     }
 
-    private void sendCasMulti(final SocketAddress address,
-                              final List<BufferWrapper<K>> keyList,
-                              final Map<K, ValueWithCas<V>> map,
-                              final int expirationInSecs,
-                              final long writeTimeoutInMillis,
-                              final long responseTimeoutInMillis,
-                              final Map<K, Boolean> result) throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException, NoValidObjectException {
+    private void sendCasMulti(final SocketAddress address, final List<BufferWrapper<K>> keyList,
+                              final Map<K, ValueWithCas<V>> map, final int expirationInSecs,
+                              final long writeTimeoutInMillis, final long responseTimeoutInMillis,
+                              final Map<K, Boolean> result)
+            throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException,
+                   NoValidObjectException {
         if (address == null || keyList == null || keyList.isEmpty() || result == null) {
             return;
         }
@@ -2290,11 +2441,11 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         sendInternal(address, requests, writeTimeoutInMillis, responseTimeoutInMillis, result);
     }
 
-    private void sendDeleteMulti(final SocketAddress address,
-                              final List<BufferWrapper<K>> keyList,
-                              final long writeTimeoutInMillis,
-                              final long responseTimeoutInMillis,
-                              final Map<K, Boolean> result) throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException, NoValidObjectException {
+    private void sendDeleteMulti(final SocketAddress address, final List<BufferWrapper<K>> keyList,
+                                 final long writeTimeoutInMillis, final long responseTimeoutInMillis,
+                                 final Map<K, Boolean> result)
+            throws ExecutionException, TimeoutException, InterruptedException, PoolExhaustedException,
+                   NoValidObjectException {
         if (address == null || keyList == null || keyList.isEmpty() || result == null) {
             return;
         }
@@ -2323,11 +2474,11 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         sendInternal(address, requests, writeTimeoutInMillis, responseTimeoutInMillis, result);
     }
 
-    private Object sendInternal(final SocketAddress address,
-                                final MemcachedRequest[] requests,
-                                final long writeTimeoutInMillis,
-                                final long responseTimeoutInMillis,
-                                final Map<K, ?> result) throws PoolExhaustedException, NoValidObjectException, InterruptedException, TimeoutException, ExecutionException {
+    private Object sendInternal(final SocketAddress address, final MemcachedRequest[] requests,
+                                final long writeTimeoutInMillis, final long responseTimeoutInMillis,
+                                final Map<K, ?> result)
+            throws PoolExhaustedException, NoValidObjectException, InterruptedException, TimeoutException,
+                   ExecutionException {
         if (address == null || requests == null || requests.length == 0) {
             return null;
         }
@@ -2344,23 +2495,31 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             connection = connectionPool.borrowObject(address, connectTimeoutInMillis);
         } catch (PoolExhaustedException pee) {
             if (logger.isLoggable(Level.FINER)) {
-                logger.log(Level.FINER, "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", pee);
+                logger.log(Level.FINER,
+                           "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis +
+                           "ms", pee);
             }
             throw pee;
         } catch (NoValidObjectException nvoe) {
             if (logger.isLoggable(Level.FINER)) {
-                logger.log(Level.FINER, "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", nvoe);
+                logger.log(Level.FINER,
+                           "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis +
+                           "ms", nvoe);
             }
             removeServer(address, false);
             throw nvoe;
         } catch (TimeoutException te) {
             if (logger.isLoggable(Level.FINER)) {
-                logger.log(Level.FINER, "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", te);
+                logger.log(Level.FINER,
+                           "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis +
+                           "ms", te);
             }
             throw te;
         } catch (InterruptedException ie) {
             if (logger.isLoggable(Level.FINER)) {
-                logger.log(Level.FINER, "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis + "ms", ie);
+                logger.log(Level.FINER,
+                           "failed to get the connection. address=" + address + ", timeout=" + connectTimeoutInMillis +
+                           "ms", ie);
             }
             throw ie;
         }
@@ -2378,7 +2537,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 connectionPool.removeObject(address, connection);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to remove the connection. address=" + address + ", connection=" + connection, e);
+                    logger.log(Level.SEVERE,
+                               "failed to remove the connection. address=" + address + ", connection=" + connection, e);
                 }
             }
             throw ee;
@@ -2387,7 +2547,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 connectionPool.removeObject(address, connection);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to remove the connection. address=" + address + ", connection=" + connection, e);
+                    logger.log(Level.SEVERE,
+                               "failed to remove the connection. address=" + address + ", connection=" + connection, e);
                 }
             }
             throw te;
@@ -2396,7 +2557,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 connectionPool.removeObject(address, connection);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to remove the connection. address=" + address + ", connection=" + connection, e);
+                    logger.log(Level.SEVERE,
+                               "failed to remove the connection. address=" + address + ", connection=" + connection, e);
                 }
             }
             throw ie;
@@ -2405,7 +2567,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 connectionPool.removeObject(address, connection);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to remove the connection. address=" + address + ", connection=" + connection, e);
+                    logger.log(Level.SEVERE,
+                               "failed to remove the connection. address=" + address + ", connection=" + connection, e);
                 }
             }
             throw new ExecutionException(unexpected);
@@ -2427,7 +2590,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 connectionPool.removeObject(address, connection);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to remove the connection. address=" + address + ", connection=" + connection, e);
+                    logger.log(Level.SEVERE,
+                               "failed to remove the connection. address=" + address + ", connection=" + connection, e);
                 }
             }
             throw ie;
@@ -2436,7 +2600,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 connectionPool.removeObject(address, connection);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to remove the connection. address=" + address + ", connection=" + connection, e);
+                    logger.log(Level.SEVERE,
+                               "failed to remove the connection. address=" + address + ", connection=" + connection, e);
                 }
             }
             throw new ExecutionException(unexpected);
@@ -2454,7 +2619,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 connectionPool.returnObject(address, connection);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to return the connection. address=" + address + ", connection=" + connection, e);
+                    logger.log(Level.SEVERE,
+                               "failed to return the connection. address=" + address + ", connection=" + connection, e);
                 }
             }
         } else {
@@ -2462,7 +2628,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 connectionPool.removeObject(address, connection);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.SEVERE)) {
-                    logger.log(Level.SEVERE, "failed to remove the connection. address=" + address + ", connection=" + connection, e);
+                    logger.log(Level.SEVERE,
+                               "failed to remove the connection. address=" + address + ", connection=" + connection, e);
                 }
             }
         }
@@ -2479,6 +2646,138 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
 
     private static int generateOpaque() {
         return opaqueIndex.getAndIncrement() & 0x7fffffff;
+    }
+
+    public long getConnectTimeoutInMillis() {
+        return connectTimeoutInMillis;
+    }
+
+    public long getWriteTimeoutInMillis() {
+        return writeTimeoutInMillis;
+    }
+
+    public long getResponseTimeoutInMillis() {
+        return responseTimeoutInMillis;
+    }
+
+    public long getHealthMonitorIntervalInSecs() {
+        return healthMonitorIntervalInSecs;
+    }
+
+    public boolean isFailover() {
+        return failover;
+    }
+
+    public boolean isPreferRemoteConfig() {
+        return preferRemoteConfig;
+    }
+
+    /**
+     * Returns the total number of connections
+     *
+     * @param server the server to query
+     * @return the total number of connections corresponding to the given {@code server} currently idle and active in this pool or a negative value if unsupported
+     */
+    public int getConnectionSize(final SocketAddress server) {
+        if (connectionPool == null) {
+            return -1;
+        }
+        return connectionPool.getPoolSize(server);
+    }
+
+    /**
+     * Returns the peak number of connections
+     *
+     * @param server the server to query
+     * @return the peak number of connections corresponding to the given {@code server} or a negative value if unsupported
+     */
+    public int getPeakCount(final SocketAddress server) {
+        if (connectionPool == null) {
+            return -1;
+        }
+        return connectionPool.getPeakCount(server);
+    }
+
+    /**
+     * Returns the number of connections currently borrowed from but not yet returned to the pool
+     *
+     * @param server the server to query
+     * @return the number of connections corresponding to the given {@code server} currently borrowed in this pool or a negative value if unsupported
+     */
+    public int getActiveCount(final SocketAddress server) {
+        if (connectionPool == null) {
+            return -1;
+        }
+        return connectionPool.getActiveCount(server);
+    }
+
+    /**
+     * Returns the number of connections currently idle in this pool
+     *
+     * @param server the server to query
+     * @return the number of connections corresponding to the given {@code server} currently idle in this pool or a negative value if unsupported
+     */
+    public int getIdleCount(final SocketAddress server) {
+        if (connectionPool == null) {
+            return -1;
+        }
+        return connectionPool.getIdleCount(server);
+    }
+
+    public boolean isJmxEnabled() {
+        return jmxEnabled;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public MonitoringConfig<MemcachedCacheProbe> getMonitoringConfig() {
+        return grizzlyMemcachedCacheMonitoringConfig;
+    }
+
+    /**
+     * Create the grizzly memcached cache JMX management object.
+     *
+     * @return the grizzly memcached cache JMX management object.
+     */
+    private Object createJmxManagementObject() {
+        return MonitoringUtils.loadJmxObject("org.glassfish.grizzly.memcached.jmx.GrizzlyMemcachedCache", this,
+                                             GrizzlyMemcachedCache.class);
+    }
+
+    private void enableJMX() {
+        try {
+            final GrizzlyJmxManager grizzlyJmxManager = GrizzlyJmxManager.instance();
+            if (grizzlyJmxManager == null) {
+                return;
+            }
+            final Object localManagementObject = createJmxManagementObject();
+            if (localManagementObject == null) {
+                return;
+            }
+            grizzlyJmxManager.registerAtRoot(localManagementObject);
+            jmxManager = grizzlyJmxManager;
+            managementObject = localManagementObject;
+        } catch (Exception e) {
+            if (logger.isLoggable(Level.WARNING)) {
+                logger.log(Level.WARNING, "failed to enable JMX. cache=" + this, e);
+            }
+        }
+    }
+
+    private void disableJMX() {
+        try {
+            if (jmxManager != null && managementObject != null) {
+                jmxManager.deregister(managementObject);
+            }
+            managementObject = null;
+            jmxManager = null;
+        } catch (Exception e) {
+            if (logger.isLoggable(Level.WARNING)) {
+                logger.log(Level.WARNING, "failed to disable JMX. cache=" + this, e);
+            }
+        }
     }
 
     private class HealthMonitorTask implements Runnable {
@@ -2512,14 +2811,19 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 revivals.clear();
                 final Set<SocketAddress> failuresSet = failures.keySet();
                 if (logger.isLoggable(Level.FINE)) {
-                    logger.log(Level.FINE, "try to check the failures in health monitor. failed list hint={0}, interval={1}secs", new Object[]{failuresSet, healthMonitorIntervalInSecs});
+                    logger.log(Level.FINE,
+                               "try to check the failures in health monitor. failed list hint={0}, interval={1}secs",
+                               new Object[]{failuresSet, healthMonitorIntervalInSecs});
                 } else if (logger.isLoggable(Level.INFO) && !failuresSet.isEmpty()) {
-                    logger.log(Level.INFO, "try to check the failures in health monitor. failed list hint={0}, interval={1}secs", new Object[]{failuresSet, healthMonitorIntervalInSecs});
+                    logger.log(Level.INFO,
+                               "try to check the failures in health monitor. failed list hint={0}, interval={1}secs",
+                               new Object[]{failuresSet, healthMonitorIntervalInSecs});
                 }
                 for (SocketAddress failure : failuresSet) {
                     try {
                         // get the temporary connection
-                        final ConnectorHandler<SocketAddress> connectorHandler = TCPNIOConnectorHandler.builder(transport).setReuseAddress(true).build();
+                        final ConnectorHandler<SocketAddress> connectorHandler =
+                                TCPNIOConnectorHandler.builder(transport).setReuseAddress(true).build();
                         Future<Connection> future = connectorHandler.connect(failure);
                         final Connection<SocketAddress> connection;
                         try {
@@ -2536,7 +2840,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                                 }
                             }
                             if (logger.isLoggable(Level.SEVERE)) {
-                                logger.log(Level.SEVERE, "failed to get the connection in health monitor. address=" + failure, ie);
+                                logger.log(Level.SEVERE,
+                                           "failed to get the connection in health monitor. address=" + failure, ie);
                             }
                             continue;
                         } catch (ExecutionException ee) {
@@ -2547,7 +2852,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                                 }
                             }
                             if (logger.isLoggable(Level.SEVERE)) {
-                                logger.log(Level.SEVERE, "failed to get the connection in health monitor. address=" + failure, ee);
+                                logger.log(Level.SEVERE,
+                                           "failed to get the connection in health monitor. address=" + failure, ee);
                             }
                             continue;
                         } catch (TimeoutException te) {
@@ -2558,7 +2864,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                                 }
                             }
                             if (logger.isLoggable(Level.SEVERE)) {
-                                logger.log(Level.SEVERE, "failed to get the connection in health monitor. address=" + failure, te);
+                                logger.log(Level.SEVERE,
+                                           "failed to get the connection in health monitor. address=" + failure, te);
                             }
                             continue;
                         }
@@ -2577,14 +2884,19 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
                 }
                 final Set<SocketAddress> revivalsSet = revivals.keySet();
                 if (logger.isLoggable(Level.FINE)) {
-                    logger.log(Level.FINE, "try to restore revivals in health monitor. revival list hint={0}, interval={1}secs", new Object[]{revivalsSet, healthMonitorIntervalInSecs});
+                    logger.log(Level.FINE,
+                               "try to restore revivals in health monitor. revival list hint={0}, interval={1}secs",
+                               new Object[]{revivalsSet, healthMonitorIntervalInSecs});
                 } else if (logger.isLoggable(Level.INFO) && !revivalsSet.isEmpty()) {
-                    logger.log(Level.INFO, "try to restore revivals in health monitor. revival list hint={0}, interval={1}secs", new Object[]{revivalsSet, healthMonitorIntervalInSecs});
+                    logger.log(Level.INFO,
+                               "try to restore revivals in health monitor. revival list hint={0}, interval={1}secs",
+                               new Object[]{revivalsSet, healthMonitorIntervalInSecs});
                 }
                 for (SocketAddress revival : revivalsSet) {
                     if (!addServer(revival, false)) {
                         if (logger.isLoggable(Level.WARNING)) {
-                            logger.log(Level.WARNING, "the revival was failed again in health monitor. revival={0}", revival);
+                            logger.log(Level.WARNING, "the revival was failed again in health monitor. revival={0}",
+                                       revival);
                         }
                         failures.put(revival, Boolean.TRUE);
                     }
@@ -2619,7 +2931,10 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
 
         private final ZKClient zkClient;
 
-        public Builder(final String cacheName, final GrizzlyMemcachedCacheManager manager, final TCPNIOTransport transport) {
+        private boolean jmxEnabled = false;
+
+        public Builder(final String cacheName, final GrizzlyMemcachedCacheManager manager,
+                       final TCPNIOTransport transport) {
             this.cacheName = cacheName;
             this.manager = manager;
             this.transport = transport;
@@ -2635,7 +2950,8 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             cache.start();
             if (!manager.addCache(cache)) {
                 cache.stop();
-                throw new IllegalStateException("failed to add the cache because the CacheManager already stopped or the same cache name existed");
+                throw new IllegalStateException(
+                        "failed to add the cache because the CacheManager already stopped or the same cache name existed");
             }
             return cache;
         }
@@ -2817,6 +3133,11 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
             this.preferRemoteConfig = preferRemoteConfig;
             return this;
         }
+
+        public Builder<K, V> jmxEnabled(final boolean jmxEnabled) {
+            this.jmxEnabled = jmxEnabled;
+            return this;
+        }
     }
 
     @Override
@@ -2833,7 +3154,9 @@ public class GrizzlyMemcachedCache<K, V> implements MemcachedCache<K, V>, ZooKee
         sb.append(", failover=").append(failover);
         sb.append(", preferRemoteConfig=").append(preferRemoteConfig);
         sb.append(", zkListener=").append(zkListener);
+        sb.append(", zooKeeperSupported=").append(isZooKeeperSupported());
         sb.append(", zooKeeperServerListPath='").append(zooKeeperServerListPath).append('\'');
+        sb.append(", jmxEnabled=").append(jmxEnabled);
         sb.append('}');
         return sb.toString();
     }
